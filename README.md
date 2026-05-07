@@ -170,6 +170,3 @@ python main.py
 祝你的开源项目大受欢迎，收获满满的 Star！如果后续还有需要迭代新功能，随时找我！
 
 ---
-
-*Exported from [Voyager](https://github.com/Nagi-ovo/gemini-voyager)*  
-*Generated on May 8, 2026 at 02:03 AM*
