@@ -1,110 +1,47 @@
 # ==========================================
-# 📡 NewsRadar 专有忽略规则 (高优先级)
+# 📡 NewsRadar 极简精炼版忽略规则
 # ==========================================
 
-# 🌟 核心隐私保护：严禁上传包含 API Key 的配置文件
+# 🌟 隐私护航 (绝对禁区)
 /data/
 
-# 🌟 运行产物：日志与生成的简报报告无需同步
+# 🌟 运行数据与日志
 /logs/
 /results/
+*.log
 
-# 🌟 个人备份与非代码设计文档
-/backup/
-*.pptx
-
-# 🌟 虚拟环境：你本地的 venv 文件夹名为 NewsRadar
+# 🌟 虚拟环境 (你的 venv 文件夹)
 /NewsRadar/
 
-# ==========================================
-# 🐍 标准 Python 模板 (已根据本项目优化)
-# ==========================================
+# 🌟 打包产物与中间件
+/build/
+/dist/
+*.spec
 
-# 字节码缓存文件
+# 🌟 用户指定的“无关内容” (辅助/测试/遗留脚本)
+fix_md_links.py
+fix_messy_report.py
+news_scraper.py
+npr_scanner.py
+test_news_scraper.py
+test_rss.py
+rescue_failed_chunks.py
+/backup/
+
+# 🌟 图标源码与设计稿
+icon.svg
+GUI以及图标设计思路.pptx
+
+# 🌟 环境引导脚本 (由 README 取代)
+run.bat
+setup.bat
+
+# ==========================================
+# 🐍 Python 标准环境清理
+# ==========================================
 __pycache__/
 *.py[codz]
 *$py.class
-
-# C 扩展库
-*.so
-
-# 打包与分发产物
-.Python
-build/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# PyInstaller 打包配置文件
-*.manifest
-*.spec
-
-# 安装日志
-pip-log.txt
-pip-delete-this-directory.txt
-
-# 单元测试与覆盖率报告
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py.cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# 翻译文件
-*.mo
-*.pot
-
-# Django & Flask 等框架杂物 (本项目虽未使用，但保留以防万一)
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-instance/
-.webassets-cache
-
-# 文档构建产物
-docs/_build/
-
-# 开发环境设置
-.env
-.envrc
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# 编辑器与 IDE 设置 (PyCharm / VS Code)
 .idea/
 .vscode/
-*.swp
-*.swo
 tempCodeRunnerFile.py
-
-# ==========================================
-# 💡 发布后的关键提示
-# ==========================================
-# 由于我们忽略了整个 /data/ 文件夹，建议你在 /data/ 文件夹内
-# 创建一个 config.json.example 文件并上传。
-# 里面只放空的配置结构，方便其他用户知道如何填写 API Key。
