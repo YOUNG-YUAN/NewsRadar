@@ -78,11 +78,15 @@ class FetcherThread(threading.Thread):
             
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
             
-            if config.get('use_proxy', False):
-                proxy_url = f"{config.get('proxy_server', '')}:{config.get('proxy_port', '')}"
+            # 🌟 关键修复：使用正确的键名 rss_use_proxy，并确协议头格式
+            if config.get('rss_use_proxy', False):
+                proxy_srv = config.get('rss_proxy_server', 'http://127.0.0.1')
+                if not proxy_srv.startswith('http'):
+                    proxy_srv = 'http://' + proxy_srv
+                proxy_url = f"{proxy_srv}:{config.get('rss_proxy_port', '10808')}"
                 rss_proxies = {'http': proxy_url, 'https': proxy_url}
             else:
-                rss_proxies = {'http': None, 'https': None}
+                rss_proxies = None
             
             all_new_items_this_session = []
             is_fetch_all = config.get('fetch_all', False) 
@@ -98,6 +102,7 @@ class FetcherThread(threading.Thread):
                 for attempt in range(1, 4):
                     if not self.is_running or self.is_paused: break
                     try:
+                        # 🌟 使用修复后的代理字典
                         res = requests.get(src['url'], headers=headers, proxies=rss_proxies, timeout=15)
                         res.raise_for_status()
                         
@@ -114,10 +119,9 @@ class FetcherThread(threading.Thread):
                             time.sleep(2)
                         else:
                             err_msg = str(e).split('\n')[0][:40]
-                            self.log_callback(f"❌ 获取 {src['name']} 彻底失败 (已尝试3次): {err_msg}...")
+                            self.log_callback(f"❌ 获取 {src['name']} 彻底失败: {err_msg}...")
 
-                if not feed_data:
-                    continue
+                if not feed_data: continue
 
                 for entry in feed_data.entries:
                     link = entry.link
@@ -144,12 +148,10 @@ class FetcherThread(threading.Thread):
 
             if not self.is_paused:
                 if all_new_items_this_session:
-                    # 🌟 核心修改：读取自定义的批处理大小
                     try:
                         chunk_size = int(config.get('batch_size', '30'))
                         if chunk_size <= 0: chunk_size = 30
-                    except:
-                        chunk_size = 30
+                    except: chunk_size = 30
                         
                     for idx, i in enumerate(range(0, len(all_new_items_this_session), chunk_size)):
                         chunk_items = all_new_items_this_session[i:i + chunk_size]
@@ -163,12 +165,10 @@ class FetcherThread(threading.Thread):
 
             for _ in range(sleep_secs):
                 if not self.is_running: break
-                while self.is_paused and self.is_running:
-                    time.sleep(1) 
+                while self.is_paused and self.is_running: time.sleep(1) 
                 time.sleep(1)
 
     def stop(self): self.is_running = False
-
 
 class AnalyzerThread(threading.Thread):
     def __init__(self, log_callback, token_callback):
@@ -190,19 +190,15 @@ class AnalyzerThread(threading.Thread):
                 intercept_display = batch_data["intercept_display"]
                 current_chunk = batch_data["news_list"]
         except Exception as e:
-            self.log_callback(f"读取临时文件 {os.path.basename(chunk_file)} 失败: {e}")
+            self.log_callback(f"读取临时文件失败: {e}")
             os.remove(chunk_file)
             return None, None
 
         self.log_callback(f"🚀 启动分析: {os.path.basename(chunk_file)}")
         text_data = "".join([f"[{i+1}] 标题:{n['title']}\n来源:{n['source']} | 时间: {n['time']}\n简介:{n['description']}\n链接:{n['url']}\n\n" for i, n in enumerate(current_chunk)])
 
-        # 🌟 核心修改：动态加载用户的 Prompt
         user_prompt = config.get("user_prompt", "").strip()
-        if not user_prompt:
-            interest_focus = "重点关注：AI大模型、地缘政治、科技巨头商业动态"
-        else:
-            interest_focus = f"重点关注以下领域：{user_prompt}"
+        interest_focus = f"重点关注以下领域：{user_prompt}" if user_prompt else "重点关注：AI大模型、地缘政治、科技巨头商业动态"
 
         prompt = f"""
         你是一位情报分析师。分析这批外媒新闻。
@@ -210,7 +206,7 @@ class AnalyzerThread(threading.Thread):
         【可选的栏目大类 (必须且只能使用以下名称)】：
         中国 (China) | 美国 (U.S.) | 亚洲 (Asia) | 欧洲 (Europe) | 世界 (World) | 商业 (Business) | 市场与金融 (Markets & Finance) | 人工智能与机器人 (AI & Robotics) | 科技 (Tech) | 科学 (Science) | 健康 (Health) | 能源 (Energy) | 环境与气候 (Environment & Climate) | 生活 (Lifestyle) | 文艺 (Arts & Culture) | 体育 (Sports)
         
-        必须以严格的 JSON 数组格式返回结果，绝不要包含任何 Markdown 代码块标记。
+        必须以严格的 JSON 数组格式返回结果。
         示例: [{{"is_priority": true, "translated_title": "...", "original_title": "...", "keywords": ["..."], "summary": "...", "categories": ["..."], "source": "...", "time": "...", "url": "..."}}]
         """
 
@@ -219,36 +215,34 @@ class AnalyzerThread(threading.Thread):
             try:
                 provider = config.get('ai_provider', 'Google Gemini')
                 provider_cfg = config.get('providers', {}).get(provider, {})
-                url = provider_cfg.get('url', '')
-                model_name = provider_cfg.get('model', '')
-                api_key = provider_cfg.get('api_key', '')
+                url, model_name, api_key = provider_cfg.get('url', ''), provider_cfg.get('model', ''), provider_cfg.get('api_key', '')
+
+                # 🌟 AI 代理逻辑保持正确 (使用 ai_use_proxy)
+                if config.get('ai_use_proxy', False):
+                    proxy_srv = config.get('ai_proxy_server', 'http://127.0.0.1')
+                    if not proxy_srv.startswith('http'): proxy_srv = 'http://' + proxy_srv
+                    proxy_url = f"{proxy_srv}:{config.get('ai_proxy_port', '10808')}"
+                    os.environ['HTTP_PROXY'], os.environ['HTTPS_PROXY'] = proxy_url, proxy_url
+                else:
+                    os.environ.pop('HTTP_PROXY', None); os.environ.pop('HTTPS_PROXY', None)
 
                 if provider == "Google Gemini":
                     genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel(model_name=model_name, system_instruction=prompt, generation_config={"temperature": 0.1})
+                    model = genai.GenerativeModel(model_name=model_name, system_instruction=prompt)
                     resp = model.generate_content(text_data)
                     result_text = resp.text
                     tokens_used = int((len(text_data) + len(result_text)) * 0.8)
-
                 elif provider == "Claude":
                     headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
                     data = {"model": model_name, "max_tokens": 4096, "system": prompt, "messages": [{"role": "user", "content": text_data}], "temperature": 0.1}
-                    proxy_url = f"{config.get('ai_proxy_server', '')}:{config.get('ai_proxy_port', '')}" if config.get('ai_use_proxy', False) else None
-                    req_proxies = {'http': proxy_url, 'https': proxy_url} if proxy_url else None
-                    
-                    resp = requests.post(url, headers=headers, json=data, proxies=req_proxies)
+                    resp = requests.post(url, headers=headers, json=data, proxies=None if not os.environ.get('HTTP_PROXY') else {'http': os.environ['HTTP_PROXY'], 'https': os.environ['HTTPS_PROXY']})
                     resp.raise_for_status()
                     resp_json = resp.json()
                     result_text = resp_json['content'][0]['text']
                     tokens_used = resp_json.get('usage', {}).get('input_tokens', 0) + resp_json.get('usage', {}).get('output_tokens', 0)
-
                 else:
                     client = OpenAI(api_key=api_key, base_url=url)
-                    resp = client.chat.completions.create(
-                        model=model_name,
-                        messages=[{"role": "system", "content": prompt}, {"role": "user", "content": text_data}],
-                        temperature=0.1
-                    )
+                    resp = client.chat.completions.create(model=model_name, messages=[{"role": "system", "content": prompt}, {"role": "user", "content": text_data}], temperature=0.1)
                     result_text = resp.choices[0].message.content
                     tokens_used = resp.usage.total_tokens if resp.usage else int((len(text_data) + len(result_text)) * 0.8)
 
@@ -265,26 +259,23 @@ class AnalyzerThread(threading.Thread):
                     self.log_callback(f"✅ {os.path.basename(chunk_file)} 成功解析 {len(parsed_items)} 条情报！")
                     os.remove(chunk_file)
                     return session_timestamp, {"intercept_display": intercept_display, "items": parsed_items}
-                else:
-                    raise ValueError("大模型未返回有效的 JSON 数组。")
+                else: raise ValueError("JSON 解析失败。")
 
             except Exception as e:
                 if attempt < 3:
-                    self.log_callback(f"⚠️ {os.path.basename(chunk_file)} 分析失败 (尝试 {attempt}/3)，等待 2 秒重试...")
+                    self.log_callback(f"⚠️ {os.path.basename(chunk_file)} 分析失败 (尝试 {attempt}/3)...")
                     time.sleep(2)
                 else:
-                    err_str = str(e).split('\n')[0][:50]
-                    self.log_callback(f"❌ {os.path.basename(chunk_file)} 彻底失败 (已尝试3次): {err_str}")
+                    self.log_callback(f"❌ {os.path.basename(chunk_file)} 彻底失败: {str(e)[:50]}")
                     try: os.rename(chunk_file, os.path.join(FAILED_DIR, os.path.basename(chunk_file)))
                     except: pass
                     return None, None
 
     def _merge_and_render_markdown(self, session_id, intercept_display, all_json_items, config):
-        self.log_callback(f"📝 正在整合 [{session_id}] 轮次的最终报告...")
+        self.log_callback(f"📝 正在整合报告...")
         categorized_data = {}
         for item in all_json_items:
             raw_cats = item.get("categories", ["世界 (World)"])
-            if not isinstance(raw_cats, list) or not raw_cats: raw_cats = ["世界 (World)"]
             standard_cats = list(set(normalize_category(c) for c in raw_cats))
             item["categories"] = standard_cats
             for cat in standard_cats:
@@ -293,111 +284,50 @@ class AnalyzerThread(threading.Thread):
                 
         provider = config.get('ai_provider', 'Google Gemini')
         model_name = config.get('providers', {}).get(provider, {}).get('model', 'Unknown')
-        time_range_str = "全量回溯获取" if config.get('fetch_all', False) else f"指定周期内动态 (近 {config.get('listen_freq', '60m')})"
+        time_range_str = "全量回溯获取" if config.get('fetch_all', False) else f"近 {config.get('listen_freq', '60m')}"
 
-        md_lines = []
-        md_lines.append(f"# 📡 全球新闻 AI 监听简报")
-        md_lines.append(f"> 🧠 **生成模型**：{provider} | {model_name}")
-        md_lines.append(f"> 🕒 **情报截获时间**：{intercept_display}")
-        md_lines.append(f"> ⏱️ **监听范围**：{time_range_str}\n")
-        md_lines.append("## 📑 栏目导航 (Table of Contents)")
+        md_lines = [f"# 📡 全球新闻 AI 监听简报", f"> 🧠 **生成模型**：{provider} | {model_name}", f"> 🕒 **截获时间**：{intercept_display}", f"> ⏱️ **监听范围**：{time_range_str}\n", "## 📑 栏目导航"]
         for cat in ORDERED_CATEGORIES:
-            if cat in categorized_data:
-                md_lines.append(f"* [{cat}](#{cat.lower().replace(' ', '-')})")
+            if cat in categorized_data: md_lines.append(f"* [{cat}](#{cat.lower().replace(' ', '-')})")
         md_lines.append("\n---\n")
         
         for cat in ORDERED_CATEGORIES:
             if cat not in categorized_data: continue
-            items = categorized_data[cat]
             md_lines.append(f"## {cat}")
-            items.sort(key=lambda x: (not x.get("is_priority", False), x.get("time", "")), reverse=False)
-            items.sort(key=lambda x: x.get("time", ""), reverse=True)
-            items.sort(key=lambda x: x.get("is_priority", False), reverse=True)
-
+            items = categorized_data[cat]
+            items.sort(key=lambda x: (not x.get("is_priority", False), x.get("time", "")), reverse=True)
             for item in items:
-                star = "⭐" if item.get("is_priority", False) else "📰"
-                title_cn = item.get("translated_title", "未命名标题")
-                title_en = item.get("original_title", "No Title")
+                star, title_cn = ("⭐", item.get("translated_title", "未命名")) if item.get("is_priority", False) else ("📰", item.get("translated_title", "未命名"))
                 kw_str = " ".join([f'<font color="#E53935">**{k}**</font>' for k in item.get("keywords", [])])
-                summary = item.get("summary", "")
-                cat_str = ", ".join(item.get("categories", []))
-                source = item.get("source", "Unknown")
-                pub_time = item.get("time", "Unknown Time")
-                url = item.get("url", "#")
-                md_lines.append(f"### [{star}] {title_cn}\n* **Title**: {title_en}\n* **关键词**: {kw_str}\n* **情报**: **{summary}**\n* 📎 **元数据**: 栏目 `[{cat_str}]` | 来源 {source} | 时间 {pub_time} | [🔗 原文链接]({url})\n")
-                
+                md_lines.append(f"### [{star}] {title_cn}\n* **Title**: {item.get('original_title', 'No Title')}\n* **关键词**: {kw_str}\n* **情报**: **{item.get('summary', '')}**\n* 📎 **元数据**: 来源 {item.get('source', 'Unknown')} | [🔗 原文链接]({item.get('url', '#')})\n")
         return "\n".join(md_lines), f"NewsSummary_{session_id}.md"
 
     def run(self):
-        self.log_callback("流水线2 (AI分析) 已就绪，等待处理任务...")
+        self.log_callback("流水线2 (AI分析) 已启动...")
         while self.is_running:
             if self.is_paused:
                 time.sleep(1)
                 continue
-
             raw_files = [f for f in os.listdir(RAW_DIR) if f.startswith('temp_RSS_batch_') and f.endswith('.json')]
             if not raw_files:
-                for _ in range(2):
-                    if not self.is_running: break
-                    while self.is_paused and self.is_running:
-                        time.sleep(1)
-                    time.sleep(1)
+                time.sleep(2)
                 continue
 
             config = ConfigManager.load_config()
-            if config.get('ai_use_proxy', False):
-                proxy_url = f"{config.get('ai_proxy_server', '')}:{config.get('ai_proxy_port', '')}"
-                os.environ['HTTP_PROXY'], os.environ['HTTPS_PROXY'] = proxy_url, proxy_url
-            else:
-                os.environ.pop('HTTP_PROXY', None); os.environ.pop('HTTPS_PROXY', None)
-
             sessions_dict = {}
             for f_name in raw_files:
-                session_id = f_name.split('_')[3] 
-                if session_id not in sessions_dict: sessions_dict[session_id] = []
-                sessions_dict[session_id].append(os.path.join(RAW_DIR, f_name))
+                sid = f_name.split('_')[3]; sessions_dict.setdefault(sid, []).append(os.path.join(RAW_DIR, f_name))
 
             current_session = sorted(sessions_dict.keys())[0]
-            files_to_process = sessions_dict[current_session]
             all_json_items, intercept_display = [], ""
-            
             with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-                future_to_file = {executor.submit(self._process_single_chunk, fp, config): fp for fp in files_to_process}
-                for future in concurrent.futures.as_completed(future_to_file):
-                    if not self.is_running or self.is_paused:
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        break
-                    session_timestamp, result_dict = future.result()
-                    if result_dict:
-                        intercept_display = result_dict["intercept_display"]
-                        all_json_items.extend(result_dict["items"])
+                futures = {executor.submit(self._process_single_chunk, fp, config): fp for fp in sessions_dict[current_session]}
+                for f in concurrent.futures.as_completed(futures):
+                    res = f.result()
+                    if res[1]: intercept_display, all_json_items = res[1]["intercept_display"], all_json_items + res[1]["items"]
 
-            if not self.is_running: break
-            
-            if not all_json_items:
-                self.log_callback(f"⚠️ 轮次 [{current_session}] 所有批次均解析失败，跳过报告生成。")
-                continue
-
-            final_markdown, report_name = self._merge_and_render_markdown(current_session, intercept_display, all_json_items, config)
-            save_dir = config['save_path']
-            if not os.path.exists(save_dir): os.makedirs(save_dir)
-            
-            save_path = os.path.join(save_dir, report_name)
-            write_success = False
-            for attempt in range(1, 4):
-                try:
-                    with open(save_path, 'w', encoding='utf-8') as f:
-                        f.write(final_markdown)
-                    write_success = True
-                    break
-                except Exception as e:
-                    if attempt < 3:
-                        self.log_callback(f"⚠️ 报告写入失败，文件可能被占用 (尝试 {attempt}/3)，等待 1 秒...")
-                        time.sleep(1)
-                    else:
-                        self.log_callback(f"❌ 报告写入彻底失败 (已尝试3次): {e}")
-
-            if write_success:
-                self.log_callback(f"✅ 完美缝合报告已生成: {report_name}")
-
+            if all_json_items:
+                md, name = self._merge_and_render_markdown(current_session, intercept_display, all_json_items, config)
+                with open(os.path.join(config['save_path'], name), 'w', encoding='utf-8') as f: f.write(md)
+                self.log_callback(f"✅ 报告已生成: {name}")
     def stop(self): self.is_running = False
