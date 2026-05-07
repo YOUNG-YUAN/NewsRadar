@@ -1,0 +1,7 @@
+customtkinter
+requests
+feedparser
+beautifulsoup4
+python-dateutil
+google-generativeai
+openai
