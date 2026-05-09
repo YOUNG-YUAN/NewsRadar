@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 from .config_mgr import BASE_DIR
 
@@ -7,6 +8,22 @@ try:
     HAS_MARKDOWN = True
 except ImportError: 
     HAS_MARKDOWN = False
+    
+def get_res_path(rel_path):
+    """
+    专门为打包设计的路径获取函数
+    rel_path: 资源文件的名称，如 'icon.svg'
+    """
+    # 如果是打包环境，资源在 sys._MEIPASS 下
+    base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
+    return os.path.join(base_path, rel_path)
+
+# 使用时：
+class ReportExporter:
+    def __init__(self, log_callback):
+        self.log_callback = log_callback
+        # 🌟 无论在谁的电脑上，这里都能拿到正确的 icon 绝对路径
+        self.icon_svg_path = get_res_path("icon.svg")
 
 def normalize_category(raw_cat):
     c = str(raw_cat).lower()

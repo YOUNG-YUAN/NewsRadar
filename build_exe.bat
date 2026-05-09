@@ -26,11 +26,25 @@ echo [2/3] 正在虚拟环境中安装打包引擎 (PyInstaller)...
 
 echo.
 echo [3/3] 正在执行核心编译... (这可能需要 2-3 分钟，请勿关闭窗口)
-:: 🌟 绝对锁定使用虚拟环境的 Python去执行打包！
-:: 🌟 增加了 --add-data "icon.ico;." 确保图标文件被复制进打包目录
-"%VENV_PYTHON%" -m PyInstaller --noconsole --noconfirm --onedir --windowed --icon="icon.ico" --add-data "icon.ico;." --name "NewsRadar" --collect-all customtkinter --hidden-import dateutil main.py
+
+"%VENV_PYTHON%" -m PyInstaller ^
+    --noconsole ^
+    --noconfirm ^
+    --onedir ^
+    --windowed ^
+    --icon="icon.ico" ^
+    --add-data "icon.ico;." ^
+    --add-data "icon.svg;." ^
+    --add-data "fonts/请自行放入字体文件.txt;fonts" ^
+    --name "NewsRadar" ^
+    --collect-all customtkinter ^
+    --hidden-import dateutil ^
+    --hidden-import markdown ^
+    main.py
+
 echo.
 echo ==========================================
-echo 🎉 Success! The EXE has been generated in the [dist] folder!
+echo 🎉 编译成功！NewsRadar.exe 已生成。
+echo 💡 检查：请确保 icon.svg 已成功复制到 dist/NewsRadar 目录下。
 echo ==========================================
 pause
