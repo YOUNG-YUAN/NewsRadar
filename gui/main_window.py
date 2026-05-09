@@ -6,7 +6,11 @@ import customtkinter as ctk
 import tkinter.messagebox as messagebox
 from core.pipelines import FetcherThread, AnalyzerThread
 from core.config_mgr import ConfigManager, VERSION 
-from .dialogs import SaveLocationDialog, AIModelDialog, ListenSettingsDialog
+
+# 🌟 修复：完整引入所有拆分后的弹窗组件（包括 PersonalizationDialog）
+from .dialog_sys import SaveLocationDialog, PersonalizationDialog
+from .dialog_ai import AIModelDialog
+from .dialog_rss import ListenSettingsDialog
 
 class ClickableTruncatedLabel(ctk.CTkLabel):
     def __init__(self, master, text="", max_length=50, **kwargs):
@@ -68,26 +72,31 @@ class MainWindow(ctk.CTk):
     def init_ui(self):
         self.frame_idle = ctk.CTkFrame(self, fg_color="transparent")
         
+        # 🌟 调整按钮的宽度分布，确保 5 个按钮整齐排列
         btn_start = ctk.CTkButton(self.frame_idle, text="开始获取", fg_color="#4CAF50", hover_color="#45a049", 
-                                  font=("Microsoft YaHei", 18, "bold"), width=140, height=45, command=self.start_pipelines)
+                                  font=("Microsoft YaHei", 18, "bold"), width=120, height=45, command=self.start_pipelines)
         
         btn_save = ctk.CTkButton(self.frame_idle, text="保存位置", fg_color="#008CBA", hover_color="#007399", 
-                                 font=("Microsoft YaHei", 16, "bold"), width=130, height=38, command=lambda: SaveLocationDialog(self).wait_window())
-        btn_ai = ctk.CTkButton(self.frame_idle, text="AI模型选择", fg_color="#008CBA", hover_color="#007399", 
-                               font=("Microsoft YaHei", 16, "bold"), width=130, height=38, command=lambda: AIModelDialog(self).wait_window())
+                                 font=("Microsoft YaHei", 14, "bold"), width=100, height=38, command=lambda: SaveLocationDialog(self).wait_window())
+        btn_ai = ctk.CTkButton(self.frame_idle, text="AI模型", fg_color="#008CBA", hover_color="#007399", 
+                               font=("Microsoft YaHei", 14, "bold"), width=100, height=38, command=lambda: AIModelDialog(self).wait_window())
         btn_set = ctk.CTkButton(self.frame_idle, text="监听设置", fg_color="#008CBA", hover_color="#007399", 
-                                font=("Microsoft YaHei", 16, "bold"), width=130, height=38, command=lambda: ListenSettingsDialog(self).wait_window())
+                                font=("Microsoft YaHei", 14, "bold"), width=100, height=38, command=lambda: ListenSettingsDialog(self).wait_window())
         
-        btn_start.pack(side="left", padx=10)
-        btn_save.pack(side="left", padx=15)
-        btn_ai.pack(side="left", padx=15)
-        btn_set.pack(side="left", padx=15)
+        btn_pers = ctk.CTkButton(self.frame_idle, text="个性化", fg_color="#008CBA", hover_color="#007399", 
+                                 font=("Microsoft YaHei", 14, "bold"), width=100, height=38, command=lambda: PersonalizationDialog(self).wait_window())
+        
+        btn_start.pack(side="left", padx=(10, 5))
+        btn_save.pack(side="left", padx=5)
+        btn_ai.pack(side="left", padx=5)
+        btn_set.pack(side="left", padx=5)
+        btn_pers.pack(side="left", padx=5)
         
         lbl_v_idle = ctk.CTkLabel(self.frame_idle, text=VERSION, font=("Microsoft YaHei", 14, "bold"), text_color="#A0A0A0")
-        lbl_v_idle.pack(side="right", padx=20)
+        lbl_v_idle.pack(side="right", padx=15)
         
-        self.frame_idle.pack(fill="x", padx=20, pady=15)
-
+        self.frame_idle.pack(fill="x", padx=10, pady=15)
+        
         self.frame_running = ctk.CTkFrame(self, fg_color="transparent")
         
         self.btn_pause = ctk.CTkButton(self.frame_running, text="暂停获取", fg_color="#FFEB3B", text_color="black", 

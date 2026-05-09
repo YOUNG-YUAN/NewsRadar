@@ -15,15 +15,18 @@ RAW_DIR = os.path.join(DATA_DIR, 'raw_news')
 FAILED_DIR = os.path.join(DATA_DIR, 'failed_news')
 RESULTS_DIR = os.path.join(BASE_DIR, 'results')
 LOGS_DIR = os.path.join(BASE_DIR, 'logs')
+# 🌟 新增：专门存放自定义字体文件的文件夹
+FONTS_DIR = os.path.join(BASE_DIR, 'fonts')
 
-for d in [DATA_DIR, RAW_DIR, FAILED_DIR, RESULTS_DIR, LOGS_DIR]:
+# 自动创建所有必要的物理目录
+for d in [DATA_DIR, RAW_DIR, FAILED_DIR, RESULTS_DIR, LOGS_DIR, FONTS_DIR]:
     os.makedirs(d, exist_ok=True)
 
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 SOURCES_FILE = os.path.join(DATA_DIR, 'sources.json')
 HISTORY_FILE = os.path.join(DATA_DIR, 'history.json')
 
-VERSION = "v1.0.0" 
+VERSION = "v2.0.0" 
 
 # ==========================================
 # ⚙️ 默认初始配置
@@ -39,7 +42,12 @@ DEFAULT_CONFIG = {
         "Qwen (通义千问)": {"url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus", "api_key": ""},
         "Local Ollama": {"url": "http://localhost:11434/v1", "model": "qwen2.5:7b", "api_key": "ollama"}
     },
-    "listen_freq": "1h", 
+    
+    # 🌟 新增：多服务商并发引擎架构
+    "is_multi_mode": False,
+    "multi_apis": [],
+    
+    "listen_freq": "12h", 
     "total_tokens": 0,
     "ai_use_proxy": False,
     "ai_proxy_server": "http://127.0.0.1",
@@ -49,9 +57,21 @@ DEFAULT_CONFIG = {
     "rss_proxy_port": "10808",
     "fetch_all": False,
     
-    # 🌟 新增：批处理大小与用户自定义Prompt
     "batch_size": "30",
-    "user_prompt": ""
+    "user_prompt": "",
+    
+    "export_md": True,
+    "export_pdf": True,
+
+    "language": "zh", # 底层保留语言接口，默认中文
+
+    # 🌟 预留字体接口：默认为空，程序运行时将自动回退至系统默认黑体
+    # 用户可以在 fonts/ 文件夹放入 ttf 文件并在 config.json 中指定文件名
+    "font_header": "msyhbd.ttc",              # 大标题与栏目：微软雅黑粗体
+    "font_article": "msyhl.ttc",              # 新闻标题：鸿蒙黑体
+    "font_body": "msyhl.ttc",                 # 情报摘要正文：华文中宋
+    "font_keywords": "msyhbd.ttc",             # 🌟 关键词专用字体 (推荐使用微软雅黑粗体)
+    "font_accent": "consola.ttf",             # 元数据、时间、链接、关键词：Consolas等宽
 }
 
 # 🌟 全球新闻订阅源配置矩阵
@@ -352,6 +372,24 @@ DEFAULT_SOURCES = [
 
 class ConfigManager:
     @staticmethod
+    def _check_and_update_config(config):
+        """确保老版本的 config.json 也能自动注入新的字体配置项"""
+        updated = False
+        updates_needed = {
+            "is_multi_mode": False,
+            "multi_apis": [],
+            "batch_size": "30",
+            "user_prompt": "",
+            "export_md": True,
+            "export_pdf": True,
+            "language": "zh",
+            "font_header": "msyhbd.ttc",
+            "font_article": "msyhl.ttc",
+            "font_body": "msyhl.ttc",
+            "font_keywords": "msyhbd.ttc",
+            "font_accent": "consola.ttf"
+        }
+
     def load_config():
         if not os.path.exists(CONFIG_FILE):
             ConfigManager.save_config(DEFAULT_CONFIG)
@@ -360,29 +398,41 @@ class ConfigManager:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
 
+        # 核心逻辑：确保新增字段在老配置中也能初始化
         if "providers" not in config:
             config["providers"] = DEFAULT_CONFIG["providers"]
-            config["ai_provider"] = "Google Gemini" if config.get("ai_backend") == "cloud" else "Local Ollama"
-            
-            if "cloud_api_key" in config:
-                config["providers"]["Google Gemini"]["api_key"] = config.get("cloud_api_key", "")
-                config["providers"]["Google Gemini"]["model"] = config.get("cloud_model", "gemini-1.5-flash")
-            if "local_api_key" in config:
-                config["providers"]["Local Ollama"]["api_key"] = config.get("local_api_key", "ollama")
-                config["providers"]["Local Ollama"]["url"] = config.get("local_url", "http://localhost:11434/v1")
+            config["ai_provider"] = "Google Gemini"
 
         if "rss_use_proxy" not in config:
             config["rss_use_proxy"] = False
             config["rss_proxy_server"] = "http://127.0.0.1"
             config["rss_proxy_port"] = "10808"
 
-        # 🌟 兼容老配置，注入新字段
-        if "batch_size" not in config:
-            config["batch_size"] = "30"
-        if "user_prompt" not in config:
-            config["user_prompt"] = ""
+        # 🌟 兼容性注入
+        updates_needed = {
+            "is_multi_mode": False,
+            "multi_apis": [],
+            "batch_size": "30",
+            "user_prompt": "",
+            "export_md": True,
+            "export_pdf": True,
+            "language": "zh",
+            "font_header": "msyhbd.ttc",
+            "font_article": "msyh.ttc",
+            "font_body": "msyh.ttc",
+            "font_keywords": "msyhbd.ttc",
+            "font_accent": "times.ttf"
+        }
+        
+        changed = False
+        for key, default_val in updates_needed.items():
+            if key not in config:
+                config[key] = default_val
+                changed = True
             
-        ConfigManager.save_config(config)
+        if changed:
+            ConfigManager.save_config(config)
+            
         return config
 
     @staticmethod

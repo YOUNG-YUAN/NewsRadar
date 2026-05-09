@@ -26,6 +26,7 @@ npr_scanner.py
 test_news_scraper.py
 test_rss.py
 rescue_failed_chunks.py
+md_to_pdf_batch.py
 /backup/
 
 # 🌟 图标源码与设计稿
@@ -34,6 +35,14 @@ GUI以及图标设计思路.pptx
 
 # 🌟 环境引导脚本 (由 README 取代)
 run.bat
+
+# 忽略所有字体文件 (避免侵权及仓库臃肿)
+fonts/*.ttf
+fonts/*.ttc
+fonts/*.otf
+
+# 忽略个人草稿文件
+structure.txt
 
 # ==========================================
 # 🐍 Python 标准环境清理
