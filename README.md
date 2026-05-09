@@ -1,85 +1,62 @@
-# 📡 NewsRadar (AI 新闻雷达) v1.0.0
-
-![Python Version](assets/img-001.svg)
-![License](assets/img-002.svg)
-![Platform](assets/img-003.svg)
-![GUI](assets/img-004.svg)
-![AI Models](assets/img-005.svg)
-
-**NewsRadar (AI 新闻雷达)** 是一款基于 Python 和 CustomTkinter 开发的现代化桌面端自动化情报聚合工具。
-它能够全天候、多线程地监听全球主流外媒与科研期刊的 RSS 源，截获最新资讯，并利用目前最先进的 AI 大语言模型（LLMs）对海量外文新闻进行智能翻译、分类、提炼和总结，最终自动生成排版精美的 Markdown 情报简报。
-
-无论你是密切关注地缘政治的分析师、追踪科技巨头动态的极客，还是需要每日获取顶刊论文摘要的科研工作者，NewsRadar 都能成为你最得力的私人情报官。
+# 📡 NewsRadar (AI 新闻雷达) v2.0.0
+**NewsRadar** 是一款基于 Python 开发的自动化情报聚合与 AI 分析工具。系统通过多线程监听全球主流媒体及科研期刊的 RSS 订阅源，利用大语言模型（LLMs）执行多维度情报提炼，并生成标准化的 Markdown/PDF 简报。
+**v2.0.0 版本引入了全新的模块化架构与异构多服务商并发引擎，实现了从“简单工具”向“工业级情报底座”的跨代升级。**
 
 ---
 
-## ✨ 核心特性 (Core Features)
+## 🛠️ v2.0.0 核心更新说明 (Changelog)
 
-### 🤖 1. 全平台 AI 大模型矩阵支持
-不再被单一服务商绑定！项目底层完全重构了 API 调用逻辑，动态兼容主流平台的原生接口与 OpenAI 格式接口。
-* **支持云端模型**：Google Gemini (1.5 Pro/Flash), OpenAI (GPT-4o), Anthropic Claude 3, DeepSeek (V3/R1), 阿里云通义千问 (Qwen)。
-* **支持本地部署**：完美兼容 **Ollama**，支持在断网或极度隐私环境下调用本地的 Qwen2.5, Llama3 等模型。
-* **深度思考优化**：针对 `DeepSeek-R1` 等推理模型，代码层面对 `reasoning_effort` 做了专属适配，可完美处理带有 `<think>` 思维链的返回结果。
+### 1. 异构多服务商并发引擎 (Heterogeneous Multi-Provider Engine)
 
-### ⚡ 2. 高性能“获取-分析”双引擎架构
-* **流水线分离**：采用生产者-消费者模型，`FetcherThread`（爬虫抓取）与 `AnalyzerThread`（AI 分析）完全解耦，利用线程池（ThreadPoolExecutor）并发处理数据，绝不阻塞主 UI 界面。
-* **响应式暂停/恢复**：引入了极低延迟的挂起拦截器，点击“暂停”按钮可瞬间挂起所有后台轮询，并在恢复时自动执行**时间补偿算法**，确保运行时长统计严丝合缝。
+- **架构转型**：废弃单一 URL 的密钥池机制，升级为支持不同服务商、独立模型及不同 Base URL 的并发矩阵。
+- **交互创新**：引入基于“推拉门”逻辑的单/多模式切换组件，支持 2*N 矩阵式服务节点管理。
+- **状态闭环**：建立接口连通性验证系统，通过三色状态（白/绿/红）实时反馈各节点可用性，支持全局一键并行测试。
 
-### 🛡️ 3. 工业级 3-Retry 容错机制
-网络波动是自动化的天敌。NewsRadar 在三个最容易崩溃的环节植入了严格的 `for attempt in range(1, 4)` 三次重试机制：
-* **RSS 抓取层**：遇到墙外订阅源 DNS 污染或连接超时，自动等待并重试，最高容忍 3 次彻底断连。
-* **AI 解析层**：遇到 API 频率限制 (Rate Limit) 或大模型未按严格 JSON 格式输出时，自动拦截报错并重新发起生成请求。
-* **I/O 读写层**：写入最终 Markdown 报告时，如遇系统文件夹权限锁死或杀毒软件占用，会延时排队写入，确保数据绝不丢失。
+### 2. 个性化排版与实时预览系统 (Typography Engine)
 
-### 🔒 4. 物理隔离的“双轨制”网络代理设置
-由于 RSS 源（往往需要翻墙）与 AI 接口（有时需要直连或使用特定节点）的网络环境大不相同，程序实现了**代理的彻底解绑**：
-* **AI 代理**：基于 `os.environ` 挂载，专门为大模型 API 服务。
-* **RSS 代理**：基于 `requests` 的 `proxies` 字典进行底层流量路由，绝不污染全局环境变量。
+- **WYSIWYG 渲染**：新增个性化排版弹窗，集成所见即所得（WYSIWYG）的渲染预览引擎。
+- **缩放算法**：支持预览区域 0.5x - 3.0x 的动态缩放，确保高分辨率屏幕下的视觉一致性。
+- **字体逻辑优化**：增强了对 TTF/TTC 字体的解析能力，支持粗体、斜体后缀的精准识别。
 
-### 🎨 5. 现代化交互体验 (UX)
-* 基于 **CustomTkinter** 构建的深色/浅色自适应界面。
-* **密码保护与试探**：API Key 输入框加入了 👁️/🔒 动态视觉遮盖逻辑，焦点移开时固定显示 20 个黑点，防止旁人偷窥长度。
-* **实时监控**：提供极具极客感的实时命令行日志（Queue 线程安全）、运行耗时统计以及 Token 消耗计数器。
+### 3. 模块化重构与性能优化
+
+- **核心解耦**：将 `pipelines.py` 与 `dialogs.py` 拆解为 `exporter.py`、`dialog_sys.py`、`dialog_ai.py` 等独立模块，提升代码可维护性。
+- **高密度 UI**：重新校准控件间距与容器约束，实现 750x620 的高密度紧凑布局，解决小分辨率屏幕下的组件溢出问题。
 
 ---
 
-## 🌍 内置全球信息源矩阵 (Built-in Sources)
+## ✨ 核心特性 (Features)
 
-程序默认内置了经过精细归类的高质量 RSS 订阅源（超过 120 个节点），支持在界面中“一键全选”或自定义增删：
-* **国际顶级综合大报**：BBC News (全矩阵), 纽约时报 (NYT), 华尔街日报 (WSJ), 金融时报 (FT), 卫报 (The Guardian), 半岛电视台 (Al Jazeera), 南华早报 (SCMP)。
-* **商业与金融**：彭博社 (Bloomberg), ProPublica 深度调查。
-* **科技与前沿风投**：TechCrunch, Wired, The Verge, Ars Technica。
-* **科研与学术顶刊**：Nature (自然), Cell Press (细胞), Science News, MIT Tech Review, IEEE Spectrum。
-* **中国官方与外宣**：人民网国际版 (People's Daily), CGTN 全矩阵。
-
-> 💡 **分析引擎大类**：AI 会自动将杂乱的新闻精准归入：中国、美国、亚洲、欧洲、科技、商业金融、AI与机器人、科学、健康、能源气候 等 16 个标准化栏目。
+- **全协议兼容**：原生支持 Google Gemini, OpenAI, Anthropic, DeepSeek, 阿里云通义千问及本地化部署的 Ollama。
+- **物理代理隔离**：实现 RSS 抓取层与 AI 调用层的网络代理彻底解绑。
+- **容错鲁棒性**：植入工业级 3-Retry 机制，覆盖网络请求、JSON 解析及文件 I/O 环节。
+- **分发合规性**：遵循开源版权规范，通过 `.gitignore` 排除商业字体，提供占位符式引导配置。
 
 ---
 
-## 🛠️ 安装与运行 (Installation & Usage)
+## 🚀 安装与配置 (Installation)
 
-### 选项 A：使用打包好的可执行文件 (仅限 Windows)
-如果您不想配置 Python 环境，可以直接在 GitHub 的 [Releases](../../releases) 页面下载最新版的 `NewsRadar_v1.0.0.zip`。
-1. 解压到任意文件夹。
-2. 双击运行 `NewsRadar.exe` 即可（程序完全绿色，配置文件保存在同级 `data` 目录下）。
+### 1. 准备环境
+建议使用虚拟环境运行：
 
-### 选项 B：从源码运行 (Windows / macOS / Linux)
-
-**1. 克隆仓库**
 ```bash
-git clone [https://github.com/YourUsername/NewsRadar.git](https://github.com/YourUsername/NewsRadar.git)
+# 克隆仓库
+git clone https://github.com/YourUsername/NewsRadar.git
 cd NewsRadar
 
-```
-**2. 安装依赖**
-建议使用 Python 3.8 或更高版本。推荐创建虚拟环境后执行：
-
-```bash
+# 安装依赖
 pip install -r requirements.txt
 
 ```
-*(注：requirements.txt 应包含：requests, feedparser, beautifulsoup4, google-generativeai, openai, customtkinter, python-dateutil)*
-**3. 启动程序**
+
+### 2. 字体配置 (重要)
+出于版权保护原因，本仓库不附带任何商业字体。
+
+1. 进入项目根目录下的 `fonts/` 文件夹。
+2. 请自行从 Windows 系统或其他合法渠道拷贝所需字体文件（如 `msyh.ttc`, `consola.ttf` 等）至该目录。
+3. 程序启动后，在 **[个性化]** 设置中即可识别并启用。
+
+### 3. 启动程序
 
 ```bash
 python main.py
@@ -88,85 +65,34 @@ python main.py
 
 ---
 
-## 📖 使用指南 (Quick Start)
+## 📋 依赖列表 (Requirements)
 
-1. **配置 AI 模型**：
-  - 点击主界面上的 **[AI模型选择]**。
-  - 从下拉菜单中选择你的服务商（如 DeepSeek 或 OpenAI）。
-  - 填入你的 `API Key`（支持点击 👁️ 图标查看或编辑）。
-  - （可选）如果你使用的 API 需要翻墙，请开启底部的**网络代理**并配置端口。
-  - 点击 **[连接测试]**，如果显示绿色的 `✅ 成功!`，点击保存即可。
-2. **配置监听源与频率**：
-  - 点击主界面上的 **[监听设置]**。
-  - 勾选你感兴趣的媒体平台。
-  - 在右上角设置**监听频率**（如设为 `1h`，则每次拉取只获取各平台过去 1 小时内发布的新闻；如果打开“RSS下所有新闻”开关，则进行全量回溯）。
-  - （关键）如果某些外媒 RSS 需要翻墙才能访问，请点击上方的 **[网络代理]** 按钮，单独为 RSS 爬虫开启代理。
-3. **开始截获情报**：
-  - 回到主界面，点击绿色的 **[开始获取]** 按钮。
-  - 此时雷达正式启动，你可以在日志框中实时看到抓取、分包、AI 解析的进度。
-  - 任务完成后，前往你设置的**保存位置**，即可查阅由 AI 精心排版、带有中英对照和重点摘要的 `.md` 简报文件。
+- `customtkinter==5.2.2` (GUI 框架)
+- `requests==2.33.1` (网络请求)
+- `feedparser==6.0.12` (RSS 解析)
+- `beautifulsoup4==4.14.3` (HTML 处理)
+- `openai==2.33.0` (AI 接口)
+- `google-generativeai==0.8.6` (Gemini 接口)
+- `Markdown==3.10.2` (报告转换)
 
 ---
 
-## 📦 开发者说明与打包打包指导
-项目根目录提供了一个写好的 `build_exe.bat` 脚本，用于在 Windows 下快速将 Python 源码编译为独立的 EXE 桌面程序。
-**打包要求：**
+## 📦 打包指南 (Distribution)
+项目提供 `build.bat` 脚本，支持在 Windows 环境下一键编译为独立 EXE 程序。
 
-1. 请确保你在虚拟环境中安装了 `pyinstaller`。
-2. 确保项目根目录下存在 `icon.ico` 图标文件。
-3. 运行 `build_exe.bat`。脚本会自动使用 `--add-data` 挂载图标，并收集 customtkinter 的依赖。最终生成的程序将位于 `dist/NewsRadar` 文件夹中。
-
-### 常见问题排查 (Troubleshooting)
-
-- **Q: 测试 API 时提示 401 Unauthorized 报错？**
-  - **A:** 请检查 API Key 是否复制完整（前后是否有不可见的空格）。同时，请注意在下拉菜单选择正确的服务商，不要在“云端 Gemini”下填入“DeepSeek”的密钥，这会导致认证协议不匹配。
-- **Q: 日志提示抓取源失败，一直 Retry？**
-  - **A:** RSS 源地址可能被防火墙屏蔽。请进入 `[监听设置] -> [网络代理]`，确保开启了代理并填入了正确的代理软件本地端口（如 v2ray/clash 默认通常是 10808 或 7890）。
-- **Q: 我自己打包的 EXE，修改了 icon.ico 为什么图标还是默认的或者没变化？**
-  - **A:** 这是 Windows 的系统图标缓存机制导致的，清除系统系统图标缓存即可。
-
----
-
-## 🤝 参与贡献 (Contributing)
-非常欢迎任何形式的贡献！无论你是想添加新的 RSS 新闻源、优化大模型的 Prompt 提示词，还是改进 UI，都可以通过提交 Pull Request (PR) 或开启一个 Issue 来参与。
-
-1. Fork 本仓库。
-2. 创建您的特性分支 (`git checkout -b feature/AmazingFeature`)。
-3. 提交您的修改 (`git commit -m 'Add some AmazingFeature'`)。
-4. 推送到分支 (`git push origin feature/AmazingFeature`)。
-5. 开启一个 Pull Request。
+- 打包过程会自动清理构建缓存。
+- 脚本会物理创建 `fonts/` 外部资源目录并同步占位符文件，确保分发包结构完整。
 
 ---
 
 ## 📄 许可证 (License)
-本项目基于 MIT License 开源。您可以自由地使用、修改和分发本项目的代码，但请保留原作者的版权声明。
+本项目基于 **MIT License** 开源。使用商业字体时请务必遵守相关厂商的最终用户许可协议（EULA）。
 
 ---
 
 ## 🙏 致谢 (Acknowledgments)
 
-- 感谢 CustomTkinter 提供优雅的现代 UI 框架。
-- 感谢 feedparser 为 RSS 解析提供的强大支持。
-- 感谢各大新闻媒体与科研机构提供的开放 RSS 订阅服务。
-
-```
-
-### 给你的后续建议（发布 GitHub 前的准备）：
-1. **替换仓库链接**：将文档中的 `https://github.com/YourUsername/NewsRadar.git` 替换成你实际的 GitHub URL。
-2. **准备一张截图**：强烈建议你在 README 中插入 1-2 张程序的实际运行截图。你可以将软件跑起来，截个图命名为 `screenshot.png` 放在项目里，然后在 README 的开头加入代码 `![软件截图](screenshot.png)`，这会让你的仓库吸引力暴增。
-3. **准备 requirements.txt**：在项目根目录下建一个 `requirements.txt` 文件，里面写上：
-   ```text
-   requests
-   feedparser
-   beautifulsoup4
-   google-generativeai
-   openai
-   customtkinter
-   python-dateutil
-
-```
-
-1. **提交代码**：通过 git init -> add -> commit -> push 就可以大功告成啦！
-祝你的开源项目大受欢迎，收获满满的 Star！如果后续还有需要迭代新功能，随时找我！
+- 感谢 **CustomTkinter** 提供的现代化 UI 架构。
+- 感谢 **feedparser** 在 RSS 协议解析方面的支持。
 
 ---

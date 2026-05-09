@@ -1,32 +1,29 @@
 @echo off
 chcp 65001 >nul
-title NewsRadar 自动打包工具
+title NewsRadar 自动打包工具 v2.0.0
 
 echo ==========================================
-echo 📦 正在准备将 NewsRadar 编译为 EXE 桌面软件...
+echo 📦 正在编译 NewsRadar 2.0.0 (生产环境标准)
 echo ==========================================
 echo.
 
-:: 🌟 绝杀：动态获取当前文件夹的绝对路径，并拼接出虚拟环境里 python.exe 的绝对路径
+:: 1. 定义路径
 set "VENV_PYTHON=%~dp0NewsRadar\Scripts\python.exe"
+:: 🌟 明确定义：EXE 所在的根目录
+set "EXE_ROOT=%~dp0dist\NewsRadar"
 
-echo [1/3] 验证虚拟环境 Python 引擎...
-echo 当前使用的 Python 引擎为: %VENV_PYTHON%
 if not exist "%VENV_PYTHON%" (
-    echo.
-    echo ❌ 错误：找不到虚拟环境！请确保你已经运行过 setup.bat 并且生成了 NewsRadar 文件夹！
+    echo ❌ 错误：找不到虚拟环境！
     pause
     exit /b 1
 )
 
-echo.
-echo [2/3] 正在虚拟环境中安装打包引擎 (PyInstaller)...
-:: 🌟 绝对锁定使用虚拟环境的 Python去安装
-"%VENV_PYTHON%" -m pip install pyinstaller
+echo [1/3] 正在清理旧的构建缓存...
+if exist "build" rd /s /q "build"
+if exist "dist\NewsRadar" rd /s /q "dist\NewsRadar"
 
-echo.
-echo [3/3] 正在执行核心编译... (这可能需要 2-3 分钟，请勿关闭窗口)
-
+echo [2/3] 正在执行 PyInstaller 核心编译...
+:: 🌟 这里不使用任何 --add-data 包含 fonts，确保 PyInstaller 不会干扰它
 "%VENV_PYTHON%" -m PyInstaller ^
     --noconsole ^
     --noconfirm ^
@@ -35,7 +32,6 @@ echo [3/3] 正在执行核心编译... (这可能需要 2-3 分钟，请勿关�
     --icon="icon.ico" ^
     --add-data "icon.ico;." ^
     --add-data "icon.svg;." ^
-    --add-data "fonts/请自行放入字体文件.txt;fonts" ^
     --name "NewsRadar" ^
     --collect-all customtkinter ^
     --hidden-import dateutil ^
@@ -43,8 +39,20 @@ echo [3/3] 正在执行核心编译... (这可能需要 2-3 分钟，请勿关�
     main.py
 
 echo.
+echo [3/3] 正在手动同步外部资源目录...
+:: 🌟 强制在 .exe 的同级目录创建 fonts 文件夹
+if not exist "%EXE_ROOT%\fonts" (
+    echo 正在创建目录: "%EXE_ROOT%\fonts"
+    mkdir "%EXE_ROOT%\fonts"
+)
+
+:: 🌟 物理拷贝占位文件
+copy /Y "fonts\请自行放入字体文件.txt" "%EXE_ROOT%\fonts\" >nul
+
+echo.
 echo ==========================================
-echo 🎉 编译成功！NewsRadar.exe 已生成。
-echo 💡 检查：请确保 icon.svg 已成功复制到 dist/NewsRadar 目录下。
+echo 🎉 编译成功！最终检查清单：
+echo 1. 执行文件: "%EXE_ROOT%\NewsRadar.exe"
+echo 2. 字体目录: "%EXE_ROOT%\fonts" (应包含说明文件)
 echo ==========================================
 pause
