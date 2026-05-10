@@ -6,46 +6,74 @@ from core.config_mgr import ConfigManager, FONTS_DIR
 class SaveLocationDialog(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
-        self.title("保存位置")
-        self.geometry("800x450")
+        self.title("保存位置与自动化出版")
+        self.geometry("800x550")
         self.grab_set() 
         self.config = ConfigManager.load_config()
         self.init_ui()
 
     def init_ui(self):
-        ctk.CTkLabel(self, text="保存位置", font=("Microsoft YaHei", 24, "bold")).pack(pady=20)
+        ctk.CTkLabel(self, text="保存与自动化出版设置", font=("Microsoft YaHei", 24, "bold")).pack(pady=20)
         
+        # 顶部开关组
         switch_frame = ctk.CTkFrame(self, fg_color="transparent")
         switch_frame.pack(fill="x", padx=40, pady=(0, 10))
         
-        self.switch_md = ctk.CTkSwitch(switch_frame, text="输出 Markdown 文件", font=("Microsoft YaHei", 14, "bold"))
-        self.switch_md.pack(side="left", padx=(0, 30))
+        # 左侧基础导出开关
+        left_switches = ctk.CTkFrame(switch_frame, fg_color="transparent")
+        left_switches.pack(side="left")
+        self.switch_md = ctk.CTkSwitch(left_switches, text="输出 Markdown 文件", font=("Microsoft YaHei", 14, "bold"))
+        self.switch_md.pack(anchor="w", pady=5)
         if self.config.get('export_md', True): self.switch_md.select()
         
-        self.switch_pdf = ctk.CTkSwitch(switch_frame, text="输出 PDF 文件", font=("Microsoft YaHei", 14, "bold"))
-        self.switch_pdf.pack(side="left")
+        self.switch_pdf = ctk.CTkSwitch(left_switches, text="输出 PDF 文件", font=("Microsoft YaHei", 14, "bold"))
+        self.switch_pdf.pack(anchor="w", pady=5)
         if self.config.get('export_pdf', True): self.switch_pdf.select()
 
+        # 右侧自动化出版开关
+        right_switches = ctk.CTkFrame(switch_frame, fg_color="transparent")
+        right_switches.pack(side="right")
+        self.switch_weekly = ctk.CTkSwitch(right_switches, text="开启自动周报整合", font=("Microsoft YaHei", 14, "bold"), fg_color="#FF9800", progress_color="#FF9800")
+        self.switch_weekly.pack(anchor="w", pady=5)
+        if self.config.get('enable_weekly', True): self.switch_weekly.select()
+        
+        self.switch_monthly = ctk.CTkSwitch(right_switches, text="开启自动月报整合", font=("Microsoft YaHei", 14, "bold"), fg_color="#9C27B0", progress_color="#9C27B0")
+        self.switch_monthly.pack(anchor="w", pady=5)
+        if self.config.get('enable_monthly', True): self.switch_monthly.select()
+
+        # 路径选择
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=40, pady=10)
         ctk.CTkButton(btn_frame, text="保存至文件夹", font=("Microsoft YaHei", 14), fg_color="#008CBA", hover_color="#006b8f", command=self.select_folder).pack(side="left")
 
         form_frame = ctk.CTkFrame(self, fg_color="transparent")
-        form_frame.pack(fill="x", padx=40, pady=20)
+        form_frame.pack(fill="x", padx=40, pady=5)
+        
         ctk.CTkLabel(form_frame, text="保存路径", font=("Microsoft YaHei", 14)).grid(row=0, column=0, padx=10, pady=10, sticky="e")
         self.path_entry = ctk.CTkEntry(form_frame, width=500, font=("Microsoft YaHei", 14), border_color="#008CBA", border_width=2)
         self.path_entry.grid(row=0, column=1, pady=10, sticky="w")
         self.path_entry.insert(0, self.config['save_path'])
 
-        ctk.CTkLabel(form_frame, text="文件名", font=("Microsoft YaHei", 14)).grid(row=1, column=0, padx=10, pady=10, sticky="e")
-        self.name_entry = ctk.CTkEntry(form_frame, width=500, font=("Microsoft YaHei", 14), border_color="#A0A0A0", border_width=1, fg_color="#E0E0E0", text_color="#555555")
-        self.name_entry.grid(row=1, column=1, pady=10, sticky="w")
-        self.name_entry.insert(0, "NewsSummary_YYYY-MM-DD-HHMM.<格式>")
-        self.name_entry.configure(state="readonly")
-        ctk.CTkLabel(self, text="注：YYYY-MM-DD-HHMM对应于发起监听的年-月-日-时-分", font=("Microsoft YaHei", 12)).pack(pady=10)
+        # 命名规则提示 (只读)
+        ctk.CTkLabel(form_frame, text="日报命名", font=("Microsoft YaHei", 14)).grid(row=1, column=0, padx=10, pady=5, sticky="e")
+        self.d_entry = ctk.CTkEntry(form_frame, width=500, font=("Microsoft YaHei", 14), text_color="gray")
+        self.d_entry.grid(row=1, column=1, pady=5, sticky="w")
+        self.d_entry.insert(0, "DailyNews_YYYY-MM-DD.<格式>"); self.d_entry.configure(state="readonly")
+
+        ctk.CTkLabel(form_frame, text="周报命名", font=("Microsoft YaHei", 14)).grid(row=2, column=0, padx=10, pady=5, sticky="e")
+        self.w_entry = ctk.CTkEntry(form_frame, width=500, font=("Microsoft YaHei", 14), text_color="gray")
+        self.w_entry.grid(row=2, column=1, pady=5, sticky="w")
+        self.w_entry.insert(0, "WeeklyNews_YYYY-MM-DD_to_YYYY-MM-DD.<格式>"); self.w_entry.configure(state="readonly")
+
+        ctk.CTkLabel(form_frame, text="月报命名", font=("Microsoft YaHei", 14)).grid(row=3, column=0, padx=10, pady=5, sticky="e")
+        self.m_entry = ctk.CTkEntry(form_frame, width=500, font=("Microsoft YaHei", 14), text_color="gray")
+        self.m_entry.grid(row=3, column=1, pady=5, sticky="w")
+        self.m_entry.insert(0, "MonthlyNews_YYYY-MMM.<格式>"); self.m_entry.configure(state="readonly")
+
+        ctk.CTkLabel(self, text="注：周报跨度为周一至周日，每周一16:00后生成。月报于次月5日08:00后生成。", font=("Microsoft YaHei", 12), text_color="#777").pack(pady=5)
 
         bottom_frame = ctk.CTkFrame(self, fg_color="transparent")
-        bottom_frame.pack(side="bottom", fill="x", padx=40, pady=20)
+        bottom_frame.pack(side="bottom", fill="x", padx=40, pady=15)
         ctk.CTkButton(bottom_frame, text="保存", font=("Microsoft YaHei", 14, "bold"), fg_color="#008CBA", hover_color="#006b8f", command=self.save_data).pack(side="right", padx=10)
         ctk.CTkButton(bottom_frame, text="取消", font=("Microsoft YaHei", 14), fg_color="#B0B0B0", text_color="black", hover_color="#909090", command=self.destroy).pack(side="right")
 
@@ -58,6 +86,8 @@ class SaveLocationDialog(ctk.CTkToplevel):
         self.config['save_path'] = self.path_entry.get()
         self.config['export_md'] = bool(self.switch_md.get())
         self.config['export_pdf'] = bool(self.switch_pdf.get())
+        self.config['enable_weekly'] = bool(self.switch_weekly.get())
+        self.config['enable_monthly'] = bool(self.switch_monthly.get())
         ConfigManager.save_config(self.config)
         self.destroy()
 
@@ -79,8 +109,7 @@ class PersonalizationDialog(ctk.CTkToplevel):
         return [f for f in os.listdir(FONTS_DIR) if f.lower().endswith(('.ttf', '.ttc', '.otf'))]
 
     def _analyze_font_file(self, filename):
-        if not filename or filename == "(系统默认)":
-            return "Microsoft YaHei", "normal", "roman"
+        if not filename or filename == "(系统默认)": return "Microsoft YaHei", "normal", "roman"
         fn = filename.lower()
         family, weight, slant = "Microsoft YaHei", "normal", "roman"
         if "msyh" in fn or "yahei" in fn: family = "Microsoft YaHei"
@@ -130,7 +159,6 @@ class PersonalizationDialog(ctk.CTkToplevel):
 
         ctk.CTkFrame(left_frame, height=2, fg_color="#E0E0E0").pack(fill="x", pady=20)
 
-        # 预览缩放
         zoom_frame = ctk.CTkFrame(left_frame, fg_color="transparent")
         zoom_frame.pack(fill="x", pady=5)
         ctk.CTkLabel(zoom_frame, text="预览缩放 (Zoom)", font=("Microsoft YaHei", 14, "bold")).pack(side="left")
@@ -140,7 +168,6 @@ class PersonalizationDialog(ctk.CTkToplevel):
         self.zoom_slider.set(1.0)
         self.zoom_slider.pack(fill="x", pady=(0, 10))
 
-        # 右侧预览
         right_frame = ctk.CTkFrame(main_frame, fg_color="#FFFFFF", border_width=1, border_color="#D5DBDB", corner_radius=8)
         right_frame.pack(side="right", fill="both", expand=True)
         ctk.CTkLabel(right_frame, text="排版预览 (WYSIWYG)", font=("Microsoft YaHei", 12, "bold"), text_color="gray").pack(pady=(10, 0))
@@ -190,7 +217,6 @@ class PersonalizationDialog(ctk.CTkToplevel):
         self.preview_text.config(state="disabled")
 
     def save_data(self):
-        # 🌟 不再从 UI 读取语言，仅保存字体
         for config_key, var in self.font_vars.items():
             val = var.get()
             self.config[config_key] = "" if val == "(系统默认)" else val

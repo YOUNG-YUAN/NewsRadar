@@ -15,18 +15,19 @@ RAW_DIR = os.path.join(DATA_DIR, 'raw_news')
 FAILED_DIR = os.path.join(DATA_DIR, 'failed_news')
 RESULTS_DIR = os.path.join(BASE_DIR, 'results')
 LOGS_DIR = os.path.join(BASE_DIR, 'logs')
-# 🌟 新增：专门存放自定义字体文件的文件夹
 FONTS_DIR = os.path.join(BASE_DIR, 'fonts')
+# 🌟 新增：数据湖目录，存放每日抓取的 JSON 原始数据
+DB_DIR = os.path.join(DATA_DIR, 'database')
 
 # 自动创建所有必要的物理目录
-for d in [DATA_DIR, RAW_DIR, FAILED_DIR, RESULTS_DIR, LOGS_DIR, FONTS_DIR]:
+for d in [DATA_DIR, RAW_DIR, FAILED_DIR, RESULTS_DIR, LOGS_DIR, FONTS_DIR, DB_DIR]:
     os.makedirs(d, exist_ok=True)
 
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 SOURCES_FILE = os.path.join(DATA_DIR, 'sources.json')
 HISTORY_FILE = os.path.join(DATA_DIR, 'history.json')
 
-VERSION = "v2.1.0" 
+VERSION = "v2.2.0" 
 
 # ==========================================
 # ⚙️ 默认初始配置
@@ -43,7 +44,6 @@ DEFAULT_CONFIG = {
         "Local Ollama": {"url": "http://localhost:11434/v1", "model": "qwen2.5:7b", "api_key": "ollama"}
     },
     
-    # 🌟 新增：多服务商并发引擎架构
     "is_multi_mode": False,
     "multi_apis": [],
     
@@ -62,6 +62,10 @@ DEFAULT_CONFIG = {
     
     "export_md": True,
     "export_pdf": True,
+    
+    # 🌟 新增：周报与月报自动生成开关
+    "enable_weekly": True,
+    "enable_monthly": True,
 
     "language": "zh", # 底层保留语言接口，默认中文
 
@@ -372,24 +376,6 @@ DEFAULT_SOURCES = [
 
 class ConfigManager:
     @staticmethod
-    def _check_and_update_config(config):
-        """确保老版本的 config.json 也能自动注入新的字体配置项"""
-        updated = False
-        updates_needed = {
-            "is_multi_mode": False,
-            "multi_apis": [],
-            "batch_size": "30",
-            "user_prompt": "",
-            "export_md": True,
-            "export_pdf": True,
-            "language": "zh",
-            "font_header": "msyhbd.ttc",
-            "font_article": "msyhl.ttc",
-            "font_body": "msyhl.ttc",
-            "font_keywords": "msyhbd.ttc",
-            "font_accent": "consola.ttf"
-        }
-
     def load_config():
         if not os.path.exists(CONFIG_FILE):
             ConfigManager.save_config(DEFAULT_CONFIG)
@@ -398,7 +384,6 @@ class ConfigManager:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
 
-        # 核心逻辑：确保新增字段在老配置中也能初始化
         if "providers" not in config:
             config["providers"] = DEFAULT_CONFIG["providers"]
             config["ai_provider"] = "Google Gemini"
@@ -408,24 +393,8 @@ class ConfigManager:
             config["rss_proxy_server"] = "http://127.0.0.1"
             config["rss_proxy_port"] = "10808"
 
-        # 🌟 兼容性注入
-        updates_needed = {
-            "is_multi_mode": False,
-            "multi_apis": [],
-            "batch_size": "30",
-            "user_prompt": "",
-            "export_md": True,
-            "export_pdf": True,
-            "language": "zh",
-            "font_header": "msyhbd.ttc",
-            "font_article": "msyh.ttc",
-            "font_body": "msyh.ttc",
-            "font_keywords": "msyhbd.ttc",
-            "font_accent": "times.ttf"
-        }
-        
         changed = False
-        for key, default_val in updates_needed.items():
+        for key, default_val in DEFAULT_CONFIG.items():
             if key not in config:
                 config[key] = default_val
                 changed = True

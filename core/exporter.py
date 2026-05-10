@@ -1,7 +1,9 @@
 import os
 import sys
 import subprocess
-from .config_mgr import BASE_DIR
+import json
+from datetime import datetime, timedelta
+from .config_mgr import BASE_DIR, DB_DIR
 
 try:
     import markdown
@@ -10,20 +12,8 @@ except ImportError:
     HAS_MARKDOWN = False
     
 def get_res_path(rel_path):
-    """
-    专门为打包设计的路径获取函数
-    rel_path: 资源文件的名称，如 'icon.svg'
-    """
-    # 如果是打包环境，资源在 sys._MEIPASS 下
     base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
     return os.path.join(base_path, rel_path)
-
-# 使用时：
-class ReportExporter:
-    def __init__(self, log_callback):
-        self.log_callback = log_callback
-        # 🌟 无论在谁的电脑上，这里都能拿到正确的 icon 绝对路径
-        self.icon_svg_path = get_res_path("icon.svg")
 
 def normalize_category(raw_cat):
     c = str(raw_cat).lower()
@@ -52,92 +42,125 @@ ORDERED_CATEGORIES = [
 ]
 
 class ReportExporter:
-    """独立的新闻简报渲染与导出引擎"""
     def __init__(self, log_callback):
         self.log_callback = log_callback
+        self.icon_svg_path = get_res_path("icon.svg")
 
-    def export_all(self, session_id, intercept_display, all_json_items, config):
-        """主入口：依次生成 MD, HTML, PDF"""
-        self.log_callback(f"📝 正在排版报告与分配字体引擎...")
-        
-        # 1. 生成并保存 Markdown
-        md_text, base_name = self._merge_and_render_markdown(session_id, intercept_display, all_json_items, config)
+    def update_database(self, date_str, new_items):
+        db_file = os.path.join(DB_DIR, f"daily_{date_str}.json")
+        tmp_file = db_file + ".tmp"
+        try:
+            existing_data = []
+            if os.path.exists(db_file):
+                with open(db_file, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+            
+            url_set = {item['url'] for item in existing_data}
+            added_count = 0
+            for item in new_items:
+                if item['url'] not in url_set:
+                    existing_data.append(item)
+                    url_set.add(item['url'])
+                    added_count += 1
+            
+            with open(tmp_file, 'w', encoding='utf-8') as f:
+                json.dump(existing_data, f, ensure_ascii=False, indent=2)
+            
+            if os.path.exists(db_file): os.remove(db_file)
+            os.rename(tmp_file, db_file)
+            return added_count
+        except Exception as e:
+            self.log_callback(f"❌ 数据库合并失败: {e}")
+            if os.path.exists(tmp_file): os.remove(tmp_file)
+            return 0
+
+    def render_report(self, report_type, period_label, items, config, is_update=False):
+        base_name = f"{report_type}News_{period_label}"
         save_dir = config['save_path']
         
-        with open(os.path.join(save_dir, base_name + ".md"), 'w', encoding='utf-8') as f: 
-            f.write(md_text)
-        
-        if not HAS_MARKDOWN:
-            self.log_callback(f"✅ 报告已生成 MD: {base_name}.md")
-            return
+        md_text = self._build_markdown(report_type, period_label, items, config)
+        md_path = os.path.join(save_dir, base_name + ".md")
+        if config.get('export_md', True):
+            with open(md_path, 'w', encoding='utf-8') as f: 
+                f.write(md_text)
 
-        # 2. 生成并保存精美 HTML
         html_content = self._generate_html_with_fonts(md_text, config)
-        html_abs = os.path.abspath(os.path.join(save_dir, base_name + ".html"))
-        with open(html_abs, 'w', encoding='utf-8') as f: 
+        html_path = os.path.join(save_dir, base_name + ".html")
+        with open(html_path, 'w', encoding='utf-8') as f: 
             f.write(html_content)
-        
-        # 3. 唤醒系统浏览器静默生成完美 PDF
-        pdf_abs = os.path.abspath(os.path.join(save_dir, base_name + ".pdf"))
-        if self._generate_pdf_with_browser(html_abs, pdf_abs):
-            self.log_callback(f"✅ 全套报告已生成 (PDF + HTML + MD): {base_name}")
+
+        success = False
+        if config.get('export_pdf', True):
+            pdf_path = os.path.join(save_dir, base_name + ".pdf")
+            success = self._generate_pdf_with_browser(html_path, pdf_path)
         else:
-            self.log_callback(f"⚠️ 系统自动转PDF失败，已保留精美版 HTML: {base_name}.html")
+            success = True 
+        
+        is_late = False
+        if report_type == "Daily" and is_update:
+            try:
+                target_date = datetime.strptime(period_label, "%Y-%m-%d")
+                threshold = target_date + timedelta(days=1, hours=15)
+                if datetime.now() > threshold: is_late = True
+            except: pass
+        elif report_type in ["Weekly", "Monthly"] and is_update:
+            is_late = True
 
-    def _merge_and_render_markdown(self, session_id, intercept_display, all_json_items, config):
-        categorized_data = {}
-        for item in all_json_items:
-            raw_cats = item.get("categories", ["世界 (World)"])
-            standard_cats = list(set(normalize_category(c) for c in raw_cats))
-            item["categories"] = standard_cats
-            for cat in standard_cats:
-                if cat not in categorized_data: 
-                    categorized_data[cat] = []
-                categorized_data[cat].append(item)
-                
+        prefix = "[RED_ALERT] " if is_late else ""
+        if success:
+            if is_late:
+                self.log_callback(f"{prefix}**** {base_name} (PDF + HTML + MD) 已更新！****")
+            else:
+                self.log_callback(f"{prefix}✅ 全套报告已生成 (PDF + HTML + MD): {base_name}")
+        else:
+            if is_late:
+                self.log_callback(f"{prefix}**** {base_name} (HTML + MD) 已更新！(PDF失败)****")
+            else:
+                self.log_callback(f"{prefix}⚠️ PDF生成失败，已保留 HTML: {base_name}.html")
+
+    def _build_markdown(self, r_type, label, items, config):
+        categorized = {}
+        for item in items:
+            raw_cats = item.get("categories", ["世界 World"])
+            std_cats = list(set(normalize_category(c) for c in raw_cats))
+            item["categories"] = std_cats
+            for c in std_cats:
+                categorized.setdefault(c, []).append(item)
+
         provider = config.get('ai_provider', 'Google Gemini')
-        model_name = config.get('providers', {}).get(provider, {}).get('model', 'Unknown')
-        time_range_str = "全量回溯获取" if config.get('fetch_all', False) else f"近 {config.get('listen_freq', '60m')}"
-
-        md_lines = [
-            f"# 📡 全球新闻 AI 监听简报", 
-            f"> 🧠 **生成模型**：{provider} | {model_name}", 
-            f"> 🕒 **截获时间**：{intercept_display}", 
-            f"> ⏱️ **监听范围**：{time_range_str}\n", 
+        model = config.get('providers', {}).get(provider, {}).get('model', 'Unknown')
+        
+        title_map = {"Daily": "日报", "Weekly": "周报", "Monthly": "月报"}
+        md = [
+            f"# 📡 全球新闻 AI {title_map[r_type]}",
+            f"> 🧠 **分析模型**：{provider} | {model}",
+            f"> 🕒 **生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            f"> ⏱️ **报告周期**：{label}\n",
             "## 📑 栏目导航"
         ]
         
-        for cat in ORDERED_CATEGORIES:
-            if cat in categorized_data: 
-                safe_anchor = cat.replace(' ', '-').replace('&', 'and')
-                md_lines.append(f"* [{cat}](#{safe_anchor})")
-        md_lines.append("\n---\n")
-        
-        for cat in ORDERED_CATEGORIES:
-            if cat not in categorized_data: 
-                continue
+        present_cats = [c for c in ORDERED_CATEGORIES if c in categorized]
+        for c in present_cats:
+            anchor = c.replace(' ', '-').replace('&', 'and')
+            md.append(f"* [{c}](#{anchor})")
+        md.append("\n---\n")
+
+        for c in present_cats:
+            anchor = c.replace(' ', '-').replace('&', 'and')
+            md.append(f"## <a id=\"{anchor}\"></a>{c}")
             
-            safe_anchor = cat.replace(' ', '-').replace('&', 'and')
-            md_lines.append(f"## <a id=\"{safe_anchor}\"></a>{cat}")
-            
-            items = categorized_data[cat]
-            items.sort(key=lambda x: (not x.get("is_priority", False), x.get("time", "")), reverse=True)
-            
-            for item in items:
-                star, title_cn = ("⭐", item.get("translated_title", "未命名")) if item.get("is_priority", False) else ("📰", item.get("translated_title", "未命名"))
-                kw_str = " ".join([f'<span class="keyword">**{k}**</span>' for k in item.get("keywords", [])])
+            sub_items = sorted(categorized[c], key=lambda x: (not x.get("is_priority", False), x.get("time", "")), reverse=True)
+            for item in sub_items:
+                star = "⭐" if item.get("is_priority") else "📰"
+                kws = " ".join([f'<span class="keyword">**{k}**</span>' for k in item.get("keywords", [])])
                 cat_str = ", ".join(item.get("categories", []))
-                source_str = item.get("source", "未提供")
-                time_str = item.get("time", "未提供")
-                url_str = item.get("url", "#")
-                
-                md_lines.append(f"### [{star}] {title_cn}")
-                md_lines.append(f"* **Title**: {item.get('original_title', 'No Title')}")
-                md_lines.append(f"* **关键词**: {kw_str}")
-                md_lines.append(f"* **情报**: **{item.get('summary', '')}**")
-                md_lines.append(f"* <span class=\"metadata\">📎 **元数据**: 栏目 `[{cat_str}]` | 来源 {source_str} | 时间 {time_str} | [🔗 原文链接]({url_str})</span>\n")
-                
-        return "\n".join(md_lines), f"NewsSummary_{session_id}"
+                md.append(f"### [{star}] {item.get('translated_title', '未命名')}")
+                md.append(f"* **Title**: {item.get('original_title', 'No Title')}")
+                md.append(f"* **关键词**: {kws}")
+                md.append(f"* **情报**: **{item.get('summary', '')}**")
+                md.append(f"* <span class=\"metadata\">📎 **元数据**: 栏目 `[{cat_str}]` | 来源 {item.get('source', '')} | 时间 {item.get('time', '')} | [🔗 原文链接]({item.get('url', '#')})</span>\n")
+        
+        return "\n".join(md)
 
     def _generate_pdf_with_browser(self, html_path, pdf_path):
         browser_paths = [
@@ -146,7 +169,6 @@ class ReportExporter:
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
         ]
-        
         for exe in browser_paths:
             if os.path.exists(exe):
                 try:
@@ -154,24 +176,19 @@ class ReportExporter:
                     cmd = [exe, '--headless', '--disable-gpu', f'--print-to-pdf={pdf_path}', '--no-pdf-header-footer', html_path]
                     subprocess.run(cmd, creationflags=CREATE_NO_WINDOW, check=True, timeout=30)
                     return True
-                except Exception:
-                    continue
+                except Exception: continue
         return False
 
     def _generate_html_with_fonts(self, md_text, config):
-        if not HAS_MARKDOWN: 
-            return ""
-            
+        if not HAS_MARKDOWN: return ""
         html_body = markdown.markdown(md_text, extensions=['tables', 'fenced_code'])
         fonts_dir = os.path.join(BASE_DIR, "fonts").replace("\\", "/")
 
         logo_html = ""
         icon_png = os.path.join(BASE_DIR, "icon.png").replace("\\", "/")
         icon_svg = os.path.join(BASE_DIR, "icon.svg").replace("\\", "/")
-        if os.path.exists(icon_svg):
-            logo_html = f'<img src="file:///{icon_svg}" class="report-logo">'
-        elif os.path.exists(icon_png):
-            logo_html = f'<img src="file:///{icon_png}" class="report-logo">'
+        if os.path.exists(icon_svg): logo_html = f'<img src="file:///{icon_svg}" class="report-logo">'
+        elif os.path.exists(icon_png): logo_html = f'<img src="file:///{icon_png}" class="report-logo">'
 
         def get_font_css(name, file_name):
             if file_name and os.path.exists(os.path.join(BASE_DIR, "fonts", file_name)):

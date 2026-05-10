@@ -2,12 +2,12 @@ import os
 import time
 import threading
 import queue 
+import tkinter as tk
 import customtkinter as ctk
 import tkinter.messagebox as messagebox
 from core.pipelines import FetcherThread, AnalyzerThread
 from core.config_mgr import ConfigManager, VERSION 
 
-# 🌟 修复：完整引入所有拆分后的弹窗组件（包括 PersonalizationDialog）
 from .dialog_sys import SaveLocationDialog, PersonalizationDialog
 from .dialog_ai import AIModelDialog
 from .dialog_rss import ListenSettingsDialog
@@ -48,6 +48,133 @@ class StatusIndicator(ctk.CTkFrame):
     def set_color(self, color):
         self.configure(fg_color=color)
 
+class LongPressStopButton(ctk.CTkFrame):
+    def __init__(self, master, width=120, height=45, command_click=None, command_stop=None, **kwargs):
+        super().__init__(master, width=width, height=height, fg_color="transparent", **kwargs)
+        self.pack_propagate(False) 
+        
+        self.command_click = command_click
+        self.command_stop = command_stop
+        
+        self.is_paused = False
+        self.width = width
+        self.height = height
+        
+        self.press_time = 0
+        self.timer_id = None
+        self.is_pressing = False
+
+        cr = 6
+
+        self.base_btn = ctk.CTkButton(
+            self, text="暂停获取", width=width, height=height,
+            fg_color="#FFEB3B", hover_color="#FBC02D", text_color="black",
+            corner_radius=cr, border_width=0, border_spacing=0,
+            font=("Microsoft YaHei", 18, "bold")
+        )
+        self.base_btn.place(x=0, y=0)
+
+        self.prog_frame = ctk.CTkFrame(
+            self, width=0, height=height, corner_radius=0, 
+            fg_color="#FFEB3B", bg_color="transparent"
+        )
+        self.prog_frame.place_forget()
+        
+        self.prog_btn = ctk.CTkButton(
+            self.prog_frame, text="即将中止获取", width=width, height=height,
+            fg_color="#F44336", hover_color="#F44336", text_color="white",
+            corner_radius=cr, border_width=0, border_spacing=0,
+            font=("Microsoft YaHei", 18, "bold")
+        )
+        self.prog_btn.place(x=0, y=0)
+
+        for w in [self, self.base_btn, self.prog_frame, self.prog_btn]:
+            w.bind("<ButtonPress-1>", self.on_press)
+            w.bind("<ButtonRelease-1>", self.on_release)
+            w.bind("<Leave>", self.on_leave)
+
+    def abort_press(self):
+        self.is_pressing = False
+        if self.timer_id:
+            self.after_cancel(self.timer_id)
+            self.timer_id = None
+        if self.is_paused: self.set_paused()
+        else: self.set_running()
+
+    def set_running(self):
+        self.is_paused = False
+        self.base_btn.configure(text="暂停获取", fg_color="#FFEB3B", hover_color="#FBC02D", text_color="black")
+        self.prog_frame.place_forget()
+
+    def set_paused(self):
+        self.is_paused = True
+        self.base_btn.configure(text="恢复获取", fg_color="#8BC34A", hover_color="#7CB342", text_color="black")
+        self.prog_frame.place_forget()
+
+    def on_press(self, event):
+        self.is_pressing = True
+        self.press_time = time.time()
+        if self.is_paused:
+            self.check_long_press()
+
+    def on_release(self, event):
+        if not self.is_pressing: return
+        self.is_pressing = False
+        
+        if self.timer_id:
+            self.after_cancel(self.timer_id)
+            self.timer_id = None
+
+        duration = time.time() - self.press_time
+
+        x = self.winfo_pointerx() - self.winfo_rootx()
+        y = self.winfo_pointery() - self.winfo_rooty()
+        is_inside = (0 <= x <= self.width) and (0 <= y <= self.height)
+
+        if not is_inside:
+            if self.is_paused: self.set_paused()
+            else: self.set_running()
+            return
+
+        if self.is_paused:
+            if duration < 1.0: 
+                if self.command_click: self.command_click()
+            else: 
+                self.set_paused()
+        else:
+            if self.command_click: self.command_click()
+
+    def on_leave(self, event):
+        if not self.is_pressing: return
+        x = self.winfo_pointerx() - self.winfo_rootx()
+        y = self.winfo_pointery() - self.winfo_rooty()
+        if x < -2 or x > self.width + 2 or y < -2 or y > self.height + 2:
+            self.abort_press()
+
+    def check_long_press(self):
+        if not self.is_pressing: return
+        elapsed = time.time() - self.press_time
+
+        if elapsed >= 4.0:
+            self.is_pressing = False
+            self.prog_frame.place_forget()
+            if self.command_stop: self.command_stop() 
+            return
+            
+        elif elapsed >= 1.0:
+            progress = (elapsed - 1.0) / 3.0
+            new_width = min(int(self.width * progress), self.width)
+            
+            if self.base_btn.cget("text") != "即将中止获取":
+                self.base_btn.configure(text="即将中止获取", fg_color="#FFEB3B", hover_color="#FFEB3B", text_color="black")
+                self.prog_frame.configure(fg_color="#FFEB3B")
+
+            self.prog_frame.configure(width=new_width)
+            self.prog_frame.place(x=0, y=0)
+            
+        self.timer_id = self.after(20, self.check_long_press)
+
+
 class MainWindow(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -72,7 +199,6 @@ class MainWindow(ctk.CTk):
     def init_ui(self):
         self.frame_idle = ctk.CTkFrame(self, fg_color="transparent")
         
-        # 🌟 调整按钮的宽度分布，确保 5 个按钮整齐排列
         btn_start = ctk.CTkButton(self.frame_idle, text="开始获取", fg_color="#4CAF50", hover_color="#45a049", 
                                   font=("Microsoft YaHei", 18, "bold"), width=120, height=45, command=self.start_pipelines)
         
@@ -97,32 +223,37 @@ class MainWindow(ctk.CTk):
         
         self.frame_idle.pack(fill="x", padx=10, pady=15)
         
+        # ==========================================
         self.frame_running = ctk.CTkFrame(self, fg_color="transparent")
         
-        self.btn_pause = ctk.CTkButton(self.frame_running, text="暂停获取", fg_color="#FFEB3B", text_color="black", 
-                                  hover_color="#FBC02D", font=("Microsoft YaHei", 18, "bold"), width=140, height=45, command=self.toggle_pause)
+        running_btn_frame = ctk.CTkFrame(self.frame_running, fg_color="transparent")
+        running_btn_frame.pack(side="top", fill="x", pady=0)
         
-        btn_stop = ctk.CTkButton(self.frame_running, text="中止获取", fg_color="#F44336", hover_color="#D32F2F", 
-                                 font=("Microsoft YaHei", 18, "bold"), width=140, height=45, command=self.stop_pipelines)
+        self.action_btn = LongPressStopButton(
+            running_btn_frame, width=120, height=45,
+            command_click=self.toggle_pause, command_stop=self.stop_pipelines
+        )
+        self.action_btn.pack(side="left", padx=(10, 5))
+
+        lbl_v_run = ctk.CTkLabel(running_btn_frame, text=VERSION, font=("Microsoft YaHei", 14, "bold"), text_color="#A0A0A0")
+        lbl_v_run.pack(side="right", padx=15)
+
+        running_info_frame = ctk.CTkFrame(self.frame_running, fg_color="transparent")
+        running_info_frame.pack(side="top", fill="x", padx=10, pady=(2, 0))
         
-        self.btn_pause.pack(side="left", padx=10)
-        btn_stop.pack(side="left", padx=10)
-
-        lbl_v_run = ctk.CTkLabel(self.frame_running, text=VERSION, font=("Microsoft YaHei", 14, "bold"), text_color="#A0A0A0")
-        lbl_v_run.pack(side="right", padx=20)
-
-        info_frame = ctk.CTkFrame(self.frame_running, fg_color="transparent")
-        info_frame.pack(side="left", padx=20, fill="both", expand=True)
+        self.lbl_ai_info = ClickableTruncatedLabel(running_info_frame, text="", max_length=45, font=("Microsoft YaHei", 14), text_color="#A0A0A0")
+        self.lbl_save_info = ClickableTruncatedLabel(running_info_frame, text="", max_length=50, font=("Microsoft YaHei", 14), text_color="#A0A0A0")
         
-        self.lbl_ai_info = ClickableTruncatedLabel(info_frame, text="", max_length=45, font=("Microsoft YaHei", 14), text_color="#A0A0A0")
-        self.lbl_save_info = ClickableTruncatedLabel(info_frame, text="", max_length=45, font=("Microsoft YaHei", 14), text_color="#A0A0A0")
-        self.lbl_ai_info.pack(anchor="w", pady=2)
-        self.lbl_save_info.pack(anchor="w", pady=2)
+        self.lbl_ai_info.pack(side="left", pady=0)
+        self.lbl_save_info.pack(side="right", pady=0)
 
+        # ==========================================
         log_container = ctk.CTkFrame(self, fg_color="transparent")
-        log_container.pack(fill="both", expand=True, padx=20, pady=10)
+        log_container.pack(fill="both", expand=True, padx=20, pady=(5, 10))
         
         self.log_area = ctk.CTkTextbox(log_container, font=("Consolas", 13), border_color="#555555", border_width=2)
+        # 🌟 核心修复：移除会引发报错的 font 属性，保留颜色配置
+        self.log_area.tag_config("RED_ALERT", foreground="#F44336")
         self.log_area.pack(fill="both", expand=True)
         
         self.watermark = ctk.CTkLabel(log_container, text="运行日志", font=("Microsoft YaHei", 24, "bold"), text_color="#555555")
@@ -154,7 +285,14 @@ class MainWindow(ctk.CTk):
             if self.watermark.winfo_ismapped():
                 self.watermark.place_forget()
             timestamp = time.strftime('%H:%M:%S')
-            self.log_area.insert("end", f"[{timestamp}] {text}\n")
+            
+            # 拦截逻辑：识别红字指令
+            if "[RED_ALERT]" in text:
+                clean_text = text.replace("[RED_ALERT]", "").strip()
+                self.log_area.insert("end", f"[{timestamp}] {clean_text}\n", "RED_ALERT")
+            else:
+                self.log_area.insert("end", f"[{timestamp}] {text}\n")
+                
             self.log_area.see("end")
 
         while not self.token_queue.empty():
@@ -185,10 +323,11 @@ class MainWindow(ctk.CTk):
     def start_pipelines(self):
         self.config = ConfigManager.load_config()
         self.frame_idle.pack_forget()
-        self.frame_running.pack(fill="x", padx=20, pady=15, before=self.log_area.master)
+        
+        self.frame_running.pack(fill="x", padx=10, pady=(15, 0), before=self.log_area.master)
         
         self.is_paused = False
-        self.btn_pause.configure(text="暂停获取", fg_color="#FFEB3B", hover_color="#FBC02D")
+        self.action_btn.set_running()
         
         provider = self.config.get('ai_provider', 'Google Gemini')
         model_name = self.config.get('providers', {}).get(provider, {}).get('model', 'Unknown')
@@ -221,7 +360,7 @@ class MainWindow(ctk.CTk):
         
         if self.is_paused:
             self.is_paused = False
-            self.btn_pause.configure(text="暂停获取", fg_color="#FFEB3B", hover_color="#FBC02D")
+            self.action_btn.set_running()
             if self.fetcher: self.fetcher.is_paused = False
             if self.analyzer: self.analyzer.is_paused = False
             
@@ -230,7 +369,7 @@ class MainWindow(ctk.CTk):
             self.status_indicator.set_color("#4CAF50")
         else:
             self.is_paused = True
-            self.btn_pause.configure(text="恢复获取", fg_color="#8BC34A", hover_color="#7CB342")
+            self.action_btn.set_paused()
             if self.fetcher: self.fetcher.is_paused = True
             if self.analyzer: self.analyzer.is_paused = True
             
@@ -249,7 +388,7 @@ class MainWindow(ctk.CTk):
         self.lbl_time.configure(text="程序已停止")
         
         self.frame_running.pack_forget()
-        self.frame_idle.pack(fill="x", padx=20, pady=15, before=self.log_area.master)
+        self.frame_idle.pack(fill="x", padx=10, pady=15, before=self.log_area.master)
         
         threading.Thread(target=self._monitor_shutdown, daemon=True).start()
 
