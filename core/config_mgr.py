@@ -27,7 +27,7 @@ CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 SOURCES_FILE = os.path.join(DATA_DIR, 'sources.json')
 HISTORY_FILE = os.path.join(DATA_DIR, 'history.json')
 
-VERSION = "v2.2.0" 
+VERSION = "v2.2.1" 
 
 # ==========================================
 # ⚙️ 默认初始配置

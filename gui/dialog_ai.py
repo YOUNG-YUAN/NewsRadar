@@ -12,7 +12,6 @@ class AIModelDialog(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("AI大模型及网络设置")
-        # 🌟 窗口整体变窄，更加紧凑
         self.geometry("840x650") 
         self.grab_set()
         self.config = ConfigManager.load_config()
@@ -24,20 +23,29 @@ class AIModelDialog(ctk.CTkToplevel):
         self.multi_apis = self.config.get("multi_apis", [])
         self.current_api_index = 0
         
-        self.api_test_status = [0] * max(len(self.multi_apis), 1)
+        # 🌟 独立提取单模式数据，彻底与 multi_apis 数组解绑
+        default_prov = self.config.get('ai_provider', 'Google Gemini')
+        tpl = self.config.get('providers', {}).get(default_prov, {})
+        self.single_api = {
+            'provider': default_prov,
+            'url': tpl.get('url', ''),
+            'model': tpl.get('model', ''),
+            'api_key': tpl.get('api_key', '')
+        }
+        self.single_test_status = 0 # 单模式专属状态
         
         if not self.multi_apis:
-            default_prov = self.config.get('ai_provider', 'Google Gemini')
-            tpl = self.config.get('providers', {}).get(default_prov, {})
-            self.multi_apis = [{
-                'provider': default_prov,
-                'url': tpl.get('url', ''),
-                'model': tpl.get('model', ''),
-                'api_key': tpl.get('api_key', '')
-            }]
+            self.multi_apis = [self.single_api.copy()]
+            
+        self.api_test_status = [0] * max(len(self.multi_apis), 1)
 
         self.init_ui()
-        self.load_slot_to_form(0)
+        
+        # 根据模式初始化界面读取的数据源 (-1 代表单模式)
+        if self.is_multi_mode:
+            self.load_slot_to_form(self.current_api_index)
+        else:
+            self.load_slot_to_form(-1)
 
     def init_ui(self):
         ctk.CTkLabel(self, text="AI大模型及并发引擎设置", font=("Microsoft YaHei", 24, "bold")).pack(pady=10)
@@ -53,7 +61,7 @@ class AIModelDialog(ctk.CTkToplevel):
 
         # --- 左侧：核心参数 ---
         self.form_frame = ctk.CTkFrame(top_section, fg_color="transparent")
-        self.form_frame.pack(side="left", fill="both", expand=True, padx=(0, 5)) # 🌟 缩小与右侧的间距
+        self.form_frame.pack(side="left", fill="both", expand=True, padx=(0, 5)) 
 
         tab_frame = ctk.CTkFrame(self.form_frame, fg_color="transparent")
         tab_frame.pack(fill="x", pady=5)
@@ -70,7 +78,6 @@ class AIModelDialog(ctk.CTkToplevel):
         params_box.pack(fill="x", pady=5)
         
         ctk.CTkLabel(params_box, text="模型URL", font=("Microsoft YaHei", 14)).grid(row=0, column=0, padx=10, pady=10, sticky="e")
-        # 🌟 缩小输入框宽度以实现紧凑布局
         self.url_entry = ctk.CTkEntry(params_box, width=380, font=("Microsoft YaHei", 14), border_color="#008CBA", border_width=2)
         self.url_entry.grid(row=0, column=1, pady=10, sticky="w")
 
@@ -160,8 +167,12 @@ class AIModelDialog(ctk.CTkToplevel):
         ctk.CTkButton(bottom_frame, text="取消", font=("Microsoft YaHei", 14), fg_color="#B0B0B0", text_color="black", hover_color="#909090", width=80, command=self.destroy).pack(side="right")
 
     def get_slot_appearance(self, index):
-        status = self.api_test_status[index]
-        is_selected = (index == self.current_api_index)
+        if index == -1: # 单模式状态
+            status = self.single_test_status
+            is_selected = True
+        else: # 多模式状态
+            status = self.api_test_status[index]
+            is_selected = (index == self.current_api_index)
         
         bg_color = "#FFFFFF"   
         text_color = "#000000"
@@ -188,7 +199,8 @@ class AIModelDialog(ctk.CTkToplevel):
             slot_frame = ctk.CTkFrame(self.right_panel, fg_color="transparent")
             slot_frame.pack(side="left", fill="both", expand=True, padx=5, pady=10)
             
-            bg, tc, bw, bc = self.get_slot_appearance(0)
+            # 单模式渲染专属外观
+            bg, tc, bw, bc = self.get_slot_appearance(-1)
             btn_1 = ctk.CTkButton(slot_frame, text="1", width=30, height=30, font=("Microsoft YaHei", 14, "bold"),
                                   fg_color=bg, text_color=tc, border_width=bw, border_color=bc, hover_color=bg)
             btn_1.pack(pady=5)
@@ -233,8 +245,9 @@ class AIModelDialog(ctk.CTkToplevel):
         self.save_current_slot_to_memory()
         self.is_multi_mode = not self.is_multi_mode
         if not self.is_multi_mode:
-            self.load_slot_to_form(0)
-        self.render_door_panel()
+            self.load_slot_to_form(-1)
+        else:
+            self.load_slot_to_form(self.current_api_index)
 
     def add_api_slot(self):
         self.save_current_slot_to_memory()
@@ -265,17 +278,24 @@ class AIModelDialog(ctk.CTkToplevel):
 
     def save_current_slot_to_memory(self):
         self._sync_real_key_from_entry()
-        self.multi_apis[self.current_api_index] = {
+        data = {
             'provider': self.provider_var.get(),
             'url': self.url_entry.get().strip(),
             'model': self.name_entry.get().strip(),
             'api_key': self.real_api_key
         }
+        if not self.is_multi_mode:
+            self.single_api = data
+        else:
+            self.multi_apis[self.current_api_index] = data
 
     def load_slot_to_form(self, index):
-        self.current_api_index = index
-        data = self.multi_apis[index]
-        
+        if index == -1 or not self.is_multi_mode:
+            data = self.single_api
+        else:
+            self.current_api_index = index
+            data = self.multi_apis[index]
+            
         self.provider_var.set(data.get('provider', 'Google Gemini'))
         self.url_entry.delete(0, 'end'); self.url_entry.insert(0, data.get('url', ''))
         self.name_entry.delete(0, 'end'); self.name_entry.insert(0, data.get('model', ''))
@@ -298,13 +318,22 @@ class AIModelDialog(ctk.CTkToplevel):
     def run_single_test(self):
         self.save_current_slot_to_memory()
         self.btn_test_single.configure(state="disabled", text="测试中...")
-        self.lbl_test_result.configure(text=f"正在检测 API-{self.current_api_index + 1}...", text_color="black")
         
-        api_data = self.multi_apis[self.current_api_index]
+        if self.is_multi_mode:
+            api_data = self.multi_apis[self.current_api_index]
+            idx = self.current_api_index
+            lbl = f"API-{idx + 1}"
+        else:
+            api_data = self.single_api
+            idx = -1
+            lbl = "单模式 API"
+            
+        self.lbl_test_result.configure(text=f"正在检测 {lbl}...", text_color="black")
+        
         use_proxy = bool(self.proxy_switch.get())
         proxy_str = f"{self.proxy_server_entry.get()}:{self.proxy_port_entry.get()}" if use_proxy else None
 
-        threading.Thread(target=self._perform_single_test, args=(api_data, self.current_api_index, proxy_str), daemon=True).start()
+        threading.Thread(target=self._perform_single_test, args=(api_data, idx, proxy_str), daemon=True).start()
 
     def run_multi_test(self):
         self.save_current_slot_to_memory()
@@ -322,10 +351,13 @@ class AIModelDialog(ctk.CTkToplevel):
         
         if not key: return False, "未填写 API Key"
 
+        # 🌟 优化：提供明确的测试意图，防止模型“过度思考”导致延迟
+        test_prompt = "To test if the API connection is normal, please reply 'ok'."
+
         try:
             if provider == "Google Gemini":
                 headers = {"Content-Type": "application/json"}
-                data = {"contents": [{"parts": [{"text": "Reply 'OK'."}]}]}
+                data = {"contents": [{"parts": [{"text": test_prompt}]}]}
                 base = url.strip().rstrip('/')
                 if not base.endswith('models'): base = f"{base}/models"
                 full_url = f"{base}/{name}:generateContent?key={key}"
@@ -334,13 +366,13 @@ class AIModelDialog(ctk.CTkToplevel):
                 res = resp.json()['candidates'][0]['content']['parts'][0]['text']
             elif provider == "Claude":
                 headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-                data = {"model": name, "max_tokens": 10, "messages": [{"role": "user", "content": "Reply 'OK'."}]}
+                data = {"model": name, "max_tokens": 10, "messages": [{"role": "user", "content": test_prompt}]}
                 resp = requests.post(url, headers=headers, json=data)
                 resp.raise_for_status()
                 res = resp.json()['content'][0]['text']
             else:
                 client = OpenAI(api_key=key, base_url=url)
-                response = client.chat.completions.create(model=name, messages=[{"role": "user", "content": "Reply 'OK'."}])
+                response = client.chat.completions.create(model=name, messages=[{"role": "user", "content": test_prompt}])
                 res = response.choices[0].message.content
 
             if res: return True, "OK"
@@ -355,13 +387,18 @@ class AIModelDialog(ctk.CTkToplevel):
 
         success, msg = self._test_core_logic(api_data)
         
-        self.api_test_status[index] = 1 if success else -1
+        if index == -1:
+            self.single_test_status = 1 if success else -1
+            name_lbl = "单模式 API"
+        else:
+            self.api_test_status[index] = 1 if success else -1
+            name_lbl = f"API-{index+1}"
         
         self.after(0, self.render_door_panel)
         if success:
-            self.after(0, self._show_result, True, f"✅ API-{index+1} 测试通过！")
+            self.after(0, self._show_result, True, f"✅ {name_lbl} 测试通过！")
         else:
-            self.after(0, self._show_result, False, f"❌ API-{index+1} 失败: {msg}")
+            self.after(0, self._show_result, False, f"❌ {name_lbl} 失败: {msg}")
 
     def _perform_batch_test(self, proxy_str):
         import os
@@ -397,9 +434,18 @@ class AIModelDialog(ctk.CTkToplevel):
 
     def save_data(self):
         self.save_current_slot_to_memory()
-        
         self.config['is_multi_mode'] = self.is_multi_mode
         self.config['multi_apis'] = self.multi_apis
+        
+        p_name = self.single_api['provider']
+        self.config['ai_provider'] = p_name
+        
+        if p_name not in self.config['providers']:
+            self.config['providers'][p_name] = {}
+            
+        self.config['providers'][p_name]['url'] = self.single_api['url']
+        self.config['providers'][p_name]['model'] = self.single_api['model']
+        self.config['providers'][p_name]['api_key'] = self.single_api['api_key']
         
         self.config['ai_use_proxy'] = bool(self.proxy_switch.get())
         self.config['ai_proxy_server'] = self.proxy_server_entry.get()
