@@ -1,11 +1,13 @@
 import os
 import tkinter as tk
 import customtkinter as ctk
+import tkinter.messagebox as messagebox  # 🌟 新增导入 messagebox
 from core.config_mgr import ConfigManager, FONTS_DIR
 
 class SaveLocationDialog(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
+        self.parent_window = parent  # 🌟 关键点：保存主窗口的引用，用于调用后台线程
         self.title("保存位置与自动化出版")
         self.geometry("800x550")
         self.grab_set() 
@@ -41,10 +43,13 @@ class SaveLocationDialog(ctk.CTkToplevel):
         self.switch_monthly.pack(anchor="w", pady=5)
         if self.config.get('enable_monthly', True): self.switch_monthly.select()
 
-        # 路径选择
+        # 路径选择与手动扫描按钮
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=40, pady=10)
         ctk.CTkButton(btn_frame, text="保存至文件夹", font=("Microsoft YaHei", 14), fg_color="#008CBA", hover_color="#006b8f", command=self.select_folder).pack(side="left")
+        
+        # 🌟 新增：手动触发历史扫描按钮
+        ctk.CTkButton(btn_frame, text="立刻扫描并合并周期报告", font=("Microsoft YaHei", 14, "bold"), fg_color="#4CAF50", hover_color="#45a049", command=self.trigger_periodic_scan).pack(side="right")
 
         form_frame = ctk.CTkFrame(self, fg_color="transparent")
         form_frame.pack(fill="x", padx=40, pady=5)
@@ -74,8 +79,23 @@ class SaveLocationDialog(ctk.CTkToplevel):
 
         bottom_frame = ctk.CTkFrame(self, fg_color="transparent")
         bottom_frame.pack(side="bottom", fill="x", padx=40, pady=15)
-        ctk.CTkButton(bottom_frame, text="保存", font=("Microsoft YaHei", 14, "bold"), fg_color="#008CBA", hover_color="#006b8f", command=self.save_data).pack(side="right", padx=10)
+        ctk.CTkButton(bottom_frame, text="保存设置", font=("Microsoft YaHei", 14, "bold"), fg_color="#008CBA", hover_color="#006b8f", command=self.save_data).pack(side="right", padx=10)
         ctk.CTkButton(bottom_frame, text="取消", font=("Microsoft YaHei", 14), fg_color="#B0B0B0", text_color="black", hover_color="#909090", command=self.destroy).pack(side="right")
+
+    # 🌟 新增：触发后台手动扫描的逻辑
+    def trigger_periodic_scan(self):
+        # 必须确保后台分析线程是存活的，才能给它发指令
+        if hasattr(self.parent_window, 'analyzer') and self.parent_window.analyzer and self.parent_window.analyzer.is_alive():
+            self.parent_window.analyzer.trigger_manual_scan()
+            messagebox.showinfo(
+                "指令已发送", 
+                "已向后台发送全量历史扫描指令！\n\n请关闭设置面板并查看主界面运行日志。\n(注：未到生成时间的报告依然会被系统跳过)"
+            )
+        else:
+            messagebox.showwarning(
+                "无法扫描", 
+                "后台引擎尚未启动！\n\n请先在主界面点击【开始获取】让系统处于监听运行状态，然后再来按此按钮。"
+            )
 
     def select_folder(self):
         folder = ctk.filedialog.askdirectory(initialdir=self.path_entry.get())

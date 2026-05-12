@@ -224,6 +224,8 @@ class MainWindow(ctk.CTk):
         self.frame_idle.pack(fill="x", padx=10, pady=15)
         
         # ==========================================
+        # 🌟 运行状态顶栏改造
+        # ==========================================
         self.frame_running = ctk.CTkFrame(self, fg_color="transparent")
         
         running_btn_frame = ctk.CTkFrame(self.frame_running, fg_color="transparent")
@@ -234,6 +236,24 @@ class MainWindow(ctk.CTk):
             command_click=self.toggle_pause, command_stop=self.stop_pipelines
         )
         self.action_btn.pack(side="left", padx=(10, 5))
+
+        # 🌟 新增：专门用于暂停时显示的蓝色按钮组
+        self.running_settings_frame = ctk.CTkFrame(running_btn_frame, fg_color="transparent")
+        
+        btn_save_r = ctk.CTkButton(self.running_settings_frame, text="保存位置", fg_color="#008CBA", hover_color="#007399", 
+                                 font=("Microsoft YaHei", 14, "bold"), width=100, height=38, command=lambda: SaveLocationDialog(self).wait_window())
+        btn_ai_r = ctk.CTkButton(self.running_settings_frame, text="AI模型", fg_color="#008CBA", hover_color="#007399", 
+                               font=("Microsoft YaHei", 14, "bold"), width=100, height=38, command=lambda: AIModelDialog(self).wait_window())
+        btn_set_r = ctk.CTkButton(self.running_settings_frame, text="监听设置", fg_color="#008CBA", hover_color="#007399", 
+                                font=("Microsoft YaHei", 14, "bold"), width=100, height=38, command=lambda: ListenSettingsDialog(self).wait_window())
+        btn_pers_r = ctk.CTkButton(self.running_settings_frame, text="个性化", fg_color="#008CBA", hover_color="#007399", 
+                                 font=("Microsoft YaHei", 14, "bold"), width=100, height=38, command=lambda: PersonalizationDialog(self).wait_window())
+        
+        btn_save_r.pack(side="left", padx=5)
+        btn_ai_r.pack(side="left", padx=5)
+        btn_set_r.pack(side="left", padx=5)
+        btn_pers_r.pack(side="left", padx=5)
+        # 注意：此处不调用 .pack()，确保初始处于隐藏状态
 
         lbl_v_run = ctk.CTkLabel(running_btn_frame, text=VERSION, font=("Microsoft YaHei", 14, "bold"), text_color="#A0A0A0")
         lbl_v_run.pack(side="right", padx=15)
@@ -252,7 +272,6 @@ class MainWindow(ctk.CTk):
         log_container.pack(fill="both", expand=True, padx=20, pady=(5, 10))
         
         self.log_area = ctk.CTkTextbox(log_container, font=("Consolas", 13), border_color="#555555", border_width=2)
-        # 🌟 核心修复：移除会引发报错的 font 属性，保留颜色配置
         self.log_area.tag_config("RED_ALERT", foreground="#F44336")
         self.log_area.pack(fill="both", expand=True)
         
@@ -286,7 +305,6 @@ class MainWindow(ctk.CTk):
                 self.watermark.place_forget()
             timestamp = time.strftime('%H:%M:%S')
             
-            # 拦截逻辑：识别红字指令
             if "[RED_ALERT]" in text:
                 clean_text = text.replace("[RED_ALERT]", "").strip()
                 self.log_area.insert("end", f"[{timestamp}] {clean_text}\n", "RED_ALERT")
@@ -323,11 +341,11 @@ class MainWindow(ctk.CTk):
     def start_pipelines(self):
         self.config = ConfigManager.load_config()
         self.frame_idle.pack_forget()
-        
         self.frame_running.pack(fill="x", padx=10, pady=(15, 0), before=self.log_area.master)
         
         self.is_paused = False
         self.action_btn.set_running()
+        self.running_settings_frame.pack_forget() # 🌟 启动时确保设置按钮隐藏
         
         provider = self.config.get('ai_provider', 'Google Gemini')
         model_name = self.config.get('providers', {}).get(provider, {}).get('model', 'Unknown')
@@ -350,7 +368,11 @@ class MainWindow(ctk.CTk):
         self.write_log("系统启动中...")
 
         self.fetcher = FetcherThread(log_callback=self.write_log)
-        self.analyzer = AnalyzerThread(log_callback=self.write_log, token_callback=self.update_tokens)
+        self.analyzer = AnalyzerThread(
+            log_callback=self.write_log, 
+            token_callback=self.update_tokens,
+            fetcher_ref=self.fetcher 
+        )
         
         self.fetcher.start()
         self.analyzer.start()
@@ -359,19 +381,25 @@ class MainWindow(ctk.CTk):
         if not self.is_running: return
         
         if self.is_paused:
+            # 🌟 正在恢复执行
             self.is_paused = False
             self.action_btn.set_running()
             if self.fetcher: self.fetcher.is_paused = False
             if self.analyzer: self.analyzer.is_paused = False
             
+            self.running_settings_frame.pack_forget() # 🌟 恢复获取时隐藏设置按钮
+            
             self.start_time += (time.time() - getattr(self, 'pause_start_time', time.time()))
             self.write_log("▶️ 任务已恢复")
             self.status_indicator.set_color("#4CAF50")
         else:
+            # 🌟 正在进入暂停
             self.is_paused = True
             self.action_btn.set_paused()
             if self.fetcher: self.fetcher.is_paused = True
             if self.analyzer: self.analyzer.is_paused = True
+            
+            self.running_settings_frame.pack(side="left", padx=5) # 🌟 暂停时滑出设置按钮
             
             self.pause_start_time = time.time()
             self.write_log("⏸️ 任务已暂停 (后台线程挂起中...)")

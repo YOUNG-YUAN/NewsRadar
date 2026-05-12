@@ -169,14 +169,31 @@ class ReportExporter:
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
         ]
+        # 获取 HTML 文件大小，如果是超长报告，增加超时时间
+        html_size = os.path.getsize(html_path)
+        custom_timeout = 45 if html_size < 500000 else 90 # 🌟 大型报告给 90 秒时间
+
         for exe in browser_paths:
             if os.path.exists(exe):
                 try:
-                    CREATE_NO_WINDOW = 0x08000000
-                    cmd = [exe, '--headless', '--disable-gpu', f'--print-to-pdf={pdf_path}', '--no-pdf-header-footer', html_path]
-                    subprocess.run(cmd, creationflags=CREATE_NO_WINDOW, check=True, timeout=30)
+                    # 🌟 优化点：添加 --disable-software-rasterizer 等参数增加稳定性
+                    cmd = [
+                        exe, '--headless', '--disable-gpu', 
+                        '--disable-software-rasterizer',
+                        '--no-sandbox', # 增加兼容性
+                        f'--print-to-pdf={pdf_path}', 
+                        '--no-pdf-header-footer', 
+                        html_path
+                    ]
+                    # 物理删除已存在的 PDF 避免占用导致写入失败
+                    if os.path.exists(pdf_path): 
+                        try: os.remove(pdf_path)
+                        except: pass
+                        
+                    subprocess.run(cmd, creationflags=0x08000000, check=True, timeout=custom_timeout)
                     return True
-                except Exception: continue
+                except Exception as e:
+                    continue
         return False
 
     def _generate_html_with_fonts(self, md_text, config):

@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 from openai import OpenAI
 from dateutil import parser as date_parser
 
-from .config_mgr import ConfigManager, RAW_DIR, FAILED_DIR, DB_DIR
+from .config_mgr import ConfigManager, RAW_DIR, FAILED_DIR, DB_DIR, HISTORY_FILE
 from .exporter import ReportExporter
 
 class FetcherThread(threading.Thread):
@@ -34,6 +34,25 @@ class FetcherThread(threading.Thread):
         except: return 3600
         return 3600
 
+    def _fetch_single_source(self, src, headers, rss_proxies):
+        if not self.is_running or self.is_paused: return None
+        for attempt in range(1, 4):
+            if not self.is_running or self.is_paused: return None
+            try:
+                res = requests.get(src['url'], headers=headers, proxies=rss_proxies, timeout=15)
+                res.raise_for_status()
+                temp_feed = feedparser.parse(res.content)
+                if temp_feed.bozo and not temp_feed.entries: 
+                    raise ValueError(f"解析失败")
+                return (src, temp_feed)
+            except Exception as e:
+                if attempt < 3: 
+                    time.sleep(2)
+                else:
+                    err_msg = str(e).split('\n')[0][:40]
+                    self.log_callback(f"❌ 获取 {src['name']} 彻底失败: {err_msg}...")
+        return None
+
     def run(self):
         self.log_callback("流水线1 (多维数据截获) 已启动...")
         while self.is_running:
@@ -43,7 +62,9 @@ class FetcherThread(threading.Thread):
                 
             config = ConfigManager.load_config()
             sources = ConfigManager.load_sources()
-            history = set(ConfigManager.load_history())
+            
+            history_list = ConfigManager.load_history()
+            history = set(history_list)
             
             sleep_secs = self.get_sleep_seconds(config.get('listen_freq', '60m'))
             end_time_utc = datetime.now(timezone.utc)
@@ -62,71 +83,73 @@ class FetcherThread(threading.Thread):
             date_groups = {} 
             is_fetch_all = config.get('fetch_all', False) 
             fetched_count = 0
+            new_links_to_save = [] 
 
-            for src in sources:
-                if not self.is_running or self.is_paused: break
-                if not src.get('checked', False): continue
+            active_sources = [s for s in sources if s.get('checked', False)]
+            
+            if active_sources and not self.is_paused:
+                max_workers = min(20, len(active_sources))
+                self.log_callback(f"⚡ 启动并发抓取引擎 (并发数: {max_workers})...")
                 
-                self.log_callback(f"正在获取: {src['name']}...")
-                feed_data = None
-                for attempt in range(1, 4):
-                    if not self.is_running or self.is_paused: break
-                    try:
-                        res = requests.get(src['url'], headers=headers, proxies=rss_proxies, timeout=15)
-                        res.raise_for_status()
-                        temp_feed = feedparser.parse(res.content)
-                        if temp_feed.bozo and not temp_feed.entries: raise ValueError(f"解析失败 (Bozo)")
-                        feed_data = temp_feed
-                        break 
-                    except Exception as e:
-                        if attempt < 3:
-                            self.log_callback(f"⚠️ 获取 {src['name']} 失败 (尝试 {attempt}/3)...")
-                            time.sleep(2)
-                        else:
-                            self.log_callback(f"❌ 获取 {src['name']} 彻底失败: {str(e).splitlines()[0][:40]}")
-
-                if not feed_data: continue
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = [executor.submit(self._fetch_single_source, src, headers, rss_proxies) for src in active_sources]
                     
-                for entry in feed_data.entries:
-                    link = entry.link
-                    if link not in history:
-                        is_valid_time = is_fetch_all
-                        pub_time = None
-                        if not is_valid_time:
-                            try:
-                                pub_time = date_parser.parse(entry.published)
-                                if start_time_utc <= pub_time <= end_time_utc: is_valid_time = True
-                            except: pass 
-                                
-                        if is_valid_time:
-                            desc = BeautifulSoup(entry.description, "html.parser").get_text() if hasattr(entry, 'description') else ""
-                            try:
-                                if not pub_time: pub_time = date_parser.parse(entry.published)
-                                display_time = pub_time.strftime("%Y-%m-%d %H:%M")
-                                date_str = pub_time.strftime("%Y-%m-%d")
-                            except:
-                                dt_now = datetime.now()
-                                display_time = dt_now.strftime("%Y-%m-%d %H:%M")
-                                date_str = dt_now.strftime("%Y-%m-%d")
+                    for f in concurrent.futures.as_completed(futures):
+                        if not self.is_running or self.is_paused: break
+                        res = f.result()
+                        if res:
+                            src, feed_data = res
+                            source_new_count = 0 # 🌟 新增：统计单个源截获的有效新资讯数量
+                            
+                            for entry in feed_data.entries:
+                                link = entry.link
+                                if link not in history:
+                                    is_valid_time = is_fetch_all
+                                    pub_time = None
+                                    if not is_valid_time:
+                                        try:
+                                            pub_time = date_parser.parse(entry.published)
+                                            if start_time_utc <= pub_time <= end_time_utc: is_valid_time = True
+                                        except: pass 
+                                            
+                                    if is_valid_time:
+                                        desc = BeautifulSoup(entry.description, "html.parser").get_text() if hasattr(entry, 'description') else ""
+                                        try:
+                                            if not pub_time: pub_time = date_parser.parse(entry.published)
+                                            display_time = pub_time.strftime("%Y-%m-%d %H:%M")
+                                            date_str = pub_time.strftime("%Y-%m-%d")
+                                        except:
+                                            dt_now = datetime.now()
+                                            display_time = dt_now.strftime("%Y-%m-%d %H:%M")
+                                            date_str = dt_now.strftime("%Y-%m-%d")
 
-                            date_groups.setdefault(date_str, []).append({
-                                "source": src['name'], 
-                                "title": entry.title,
-                                "description": desc[:300], 
-                                "url": link, 
-                                "time": display_time
-                            })
-                            ConfigManager.add_to_history(link)
-                            history.add(link)
-                            fetched_count += 1
+                                        date_groups.setdefault(date_str, []).append({
+                                            "source": src['name'], 
+                                            "title": entry.title,
+                                            "description": desc[:300], 
+                                            "url": link, 
+                                            "time": display_time
+                                        })
+                                        history.add(link)
+                                        new_links_to_save.append(link)
+                                        fetched_count += 1
+                                        source_new_count += 1 # 🌟 累加当前源的有效获取量
+                            
+                            # 🌟 恢复：单源抓取完毕后的汇报日志 (包含战果)
+                            self.log_callback(f"📡 {src['name']} 扫描完毕 (截获 {source_new_count} 条新资讯)")
 
             if not self.is_paused:
+                if new_links_to_save:
+                    history_list.extend(new_links_to_save)
+                    with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(history_list, f, ensure_ascii=False)
+
                 if fetched_count > 0:
                     for d_str, items in date_groups.items():
                         batch_file = os.path.join(RAW_DIR, f"raw_{d_str}_{uuid.uuid4().hex[:8]}.json")
                         with open(batch_file, 'w', encoding='utf-8') as f:
                             json.dump({"date": d_str, "news": items}, f, ensure_ascii=False)
-                    self.log_callback(f"获取完成！共 {fetched_count} 条资讯已按日期分拆送入AI队列。")
+                    self.log_callback(f"✅ 抓取阶段结束，共截获 {fetched_count} 条新资讯。")
                 else:
                     self.log_callback("当前周期无新资讯更新。")
 
@@ -138,20 +161,28 @@ class FetcherThread(threading.Thread):
     def stop(self): self.is_running = False
 
 class AnalyzerThread(threading.Thread):
-    def __init__(self, log_callback, token_callback):
+    def __init__(self, log_callback, token_callback, fetcher_ref=None):
         super().__init__()
         self.log_callback = log_callback
         self.token_callback = token_callback
+        self.fetcher_ref = fetcher_ref
         self.is_running = True
         self.is_paused = False
         self.daemon = True
         self.token_lock = threading.Lock()
+        
+        self.round_active = False
+        self.session_news_count = 0
+        self.session_token_count = 0
+        self.session_updated_dates = set()
+        
+        self.last_history_scan_time = 0
 
     def _process_chunk(self, chunk_items, config, key_queue, session_tokens):
         if not self.is_running or self.is_paused: return None
         
         api_name, api_config = key_queue.get()
-        self.log_callback(f"🚀 [{api_name}] 接单分析...")
+        self.log_callback(f"🚀 [{api_name}] 接单，分析任务单元 (共 {len(chunk_items)} 条)...")
 
         text_data = ""
         for i, n in enumerate(chunk_items):
@@ -212,6 +243,7 @@ class AnalyzerThread(threading.Thread):
 
                 with self.token_lock:
                     session_tokens[api_name] = session_tokens.get(api_name, 0) + tokens_used
+                    self.session_token_count += tokens_used 
                     config['total_tokens'] += tokens_used
                     ConfigManager.save_config(config)
                     self.token_callback(config['total_tokens'])
@@ -226,7 +258,7 @@ class AnalyzerThread(threading.Thread):
             except Exception as e:
                 if attempt < 3: time.sleep(2)
                 else:
-                    self.log_callback(f"❌ [{api_name}] 彻底失败: {str(e)[:50]}")
+                    self.log_callback(f"❌ [{api_name}] 单元分析失败: {str(e)[:50]}")
                     key_queue.put((api_name, api_config)); key_queue.task_done()
                     return None
 
@@ -239,9 +271,28 @@ class AnalyzerThread(threading.Thread):
                 time.sleep(1); continue
                 
             raw_files = [f for f in os.listdir(RAW_DIR) if f.startswith('raw_') and f.endswith('.json')]
+            
             if not raw_files:
-                self._check_periodic_reports(exporter, ConfigManager.load_config())
-                time.sleep(3); continue
+                if self.round_active and self.fetcher_ref and not self.fetcher_ref.is_alive():
+                    self._print_session_summary()
+                    self.round_active = False 
+                    time.sleep(5)
+                
+                if getattr(self, 'manual_scan_requested', False):
+                    self.log_callback("⚙️ [收到指令] 正在全量扫描数据湖，合并生成周报/月报...")
+                    self._check_periodic_reports(exporter, ConfigManager.load_config())
+                    self.log_callback("✅ 历史数据扫描与报表生成执行完毕！")
+                    self.manual_scan_requested = False
+                    time.sleep(2)
+                else:
+                    time.sleep(3)
+                continue
+
+            if not self.round_active:
+                self.round_active = True
+                self.session_news_count = 0
+                self.session_token_count = 0
+                self.session_updated_dates.clear()
 
             config = ConfigManager.load_config()
             target_file = os.path.join(RAW_DIR, sorted(raw_files)[0])
@@ -250,6 +301,7 @@ class AnalyzerThread(threading.Thread):
                     batch_data = json.load(f)
                 date_str = batch_data['date']
                 news_items = batch_data['news']
+                self.session_news_count += len(news_items) 
             except Exception:
                 try: os.remove(target_file)
                 except: pass
@@ -273,6 +325,7 @@ class AnalyzerThread(threading.Thread):
             if chunk_size <= 0: chunk_size = 30
 
             chunks = [news_items[i:i + chunk_size] for i in range(0, len(news_items), chunk_size)]
+            
             session_tokens = {}
             all_parsed = []
 
@@ -282,85 +335,113 @@ class AnalyzerThread(threading.Thread):
                     if res := f.result(): all_parsed.extend(res)
 
             if all_parsed:
-                # 判定这是否是一次更新
-                is_update = os.path.exists(os.path.join(DB_DIR, f"daily_{date_str}.json"))
+                db_path = os.path.join(DB_DIR, f"daily_{date_str}.json")
+                is_update = os.path.exists(db_path)
+                
                 exporter.update_database(date_str, all_parsed)
                 
-                with open(os.path.join(DB_DIR, f"daily_{date_str}.json"), 'r', encoding='utf-8') as f:
-                    full_day_items = json.load(f)
-                exporter.render_report("Daily", date_str, full_day_items, config, is_update=is_update)
+                if os.path.exists(db_path):
+                    try:
+                        with open(db_path, 'r', encoding='utf-8') as f:
+                            full_day_items = json.load(f)
+                        exporter.render_report("Daily", date_str, full_day_items, config, is_update=is_update)
+                        self.session_updated_dates.add(date_str)
+                    except Exception as e:
+                        self.log_callback(f"❌ 读取数据湖失败: {e}")
+                else:
+                    self.log_callback(f"⚠️ 无法渲染 {date_str} 的日报：数据合并发生异常。")
 
                 tot = sum(session_tokens.values())
-                log_msg = "📊 本批次处理完毕！账单：\n"
-                for k, v in sorted(session_tokens.items()):
-                    if v > 0: log_msg += f"  - {k} 已消耗: {v:,} tokens\n"
-                log_msg += f"  > 💰 批次总消耗: {tot:,} tokens | 全局累计: {config['total_tokens']:,} tokens"
-                self.log_callback(log_msg)
+                if tot > 0:
+                    log_msg = "📊 本日份数据处理完毕！账单：\n"
+                    for k, v in sorted(session_tokens.items()):
+                        if v > 0: log_msg += f"  - {k} 已消耗: {v:,} tokens\n"
+                    log_msg += f"  > 💰 本日总计: {tot:,} tokens | 全局累计: {config['total_tokens']:,} tokens"
+                    self.log_callback(log_msg)
 
             try: os.remove(target_file)
             except: pass
 
+    def _print_session_summary(self):
+        daily_count = len(self.session_updated_dates)
+        
+        summary = [
+            f"\n🏁 【本轮监听任务已全部达成】",
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"📈 成果统计：共截获 {self.session_news_count} 条资讯，更新/生成了 {daily_count} 份日报。",
+            f"💰 账单统计：本轮监听轮次共消耗 {self.session_token_count:,} tokens。",
+            f"💤 状态更新：所有简报已入库。系统进入休眠，等待下一轮采样周期。",
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        ]
+        for line in summary:
+            self.log_callback(line)
+
     def _check_periodic_reports(self, exporter, config):
         now = datetime.now()
+        
+        all_dbs = [f for f in os.listdir(DB_DIR) if f.startswith('daily_') and f.endswith('.json')]
+        if not all_dbs: return
+        
+        available_dates = sorted([f.replace('daily_', '').replace('.json', '') for f in all_dbs])
+        
+        if config.get('enable_weekly', True):
+            weeks_map = {}
+            for d_str in available_dates:
+                dt = datetime.strptime(d_str, "%Y-%m-%d")
+                monday = dt - timedelta(days=dt.weekday())
+                sunday = monday + timedelta(days=6)
+                week_label = f"{monday.strftime('%Y-%m-%d')}_to_{sunday.strftime('%Y-%m-%d')}"
+                weeks_map.setdefault(week_label, []).append(d_str)
 
-        # Weekly logic
-        if config.get('enable_weekly', True) and now.weekday() == 0 and now.hour >= 16:
-            last_mon = now - timedelta(days=now.weekday() + 7)
-            last_sun = now - timedelta(days=now.weekday() + 1)
-            label = f"{last_mon.strftime('%Y-%m-%d')}_to_{last_sun.strftime('%Y-%m-%d')}"
-            weekly_pdf = os.path.join(config['save_path'], f"WeeklyNews_{label}.pdf")
-
-            needs_update = False
-            items = []
-            db_mod_times = []
-            for i in range(7):
-                day = last_mon + timedelta(days=i)
-                db_path = os.path.join(DB_DIR, f"daily_{day.strftime('%Y-%m-%d')}.json")
-                if os.path.exists(db_path):
-                    with open(db_path, 'r', encoding='utf-8') as f: items.extend(json.load(f))
-                    db_mod_times.append(os.path.getmtime(db_path))
-
-            if items:
-                is_update = False
-                if not os.path.exists(weekly_pdf): needs_update = True
-                else:
-                    pdf_mod_time = os.path.getmtime(weekly_pdf)
-                    if any(t > pdf_mod_time for t in db_mod_times):
-                        needs_update = True
-                        is_update = True
-
-                if needs_update:
-                    self.log_callback(f"📅 正在合并生成上周周报...")
-                    exporter.render_report("Weekly", label, items, config, is_update=is_update)
-
-        # Monthly logic
-        if config.get('enable_monthly', True) and now.day >= 5 and now.hour >= 8:
-            first_this_month = now.replace(day=1)
-            last_last_month = first_this_month - timedelta(days=1)
-            label = last_last_month.strftime("%Y-%b") 
-            monthly_pdf = os.path.join(config['save_path'], f"MonthlyNews_{label}.pdf")
-
-            needs_update = False
-            items = []
-            db_mod_times = []
-            for i in range(1, last_last_month.day + 1):
-                day = last_last_month.replace(day=i)
-                db_path = os.path.join(DB_DIR, f"daily_{day.strftime('%Y-%m-%d')}.json")
-                if os.path.exists(db_path):
-                    with open(db_path, 'r', encoding='utf-8') as f: items.extend(json.load(f))
-                    db_mod_times.append(os.path.getmtime(db_path))
-
-            if items:
-                is_update = False
-                if not os.path.exists(monthly_pdf): needs_update = True
-                else:
-                    pdf_mod_time = os.path.getmtime(monthly_pdf)
-                    if any(t > pdf_mod_time for t in db_mod_times):
-                        needs_update = True
-                        is_update = True
-
-                if needs_update:
-                    self.log_callback(f"📅 正在合并生成上月月报...")
-                    exporter.render_report("Monthly", label, items, config, is_update=is_update)
+            for label, days in weeks_map.items():
+                monday_of_label = datetime.strptime(label.split('_to_')[0], "%Y-%m-%d")
+                next_monday_16h = monday_of_label + timedelta(days=7, hours=16)
                 
+                if now < next_monday_16h: continue
+
+                weekly_pdf = os.path.join(config['save_path'], f"WeeklyNews_{label}.pdf")
+                self._generate_if_needed(exporter, config, "Weekly", label, days, weekly_pdf)
+
+        if config.get('enable_monthly', True):
+            months_map = {}
+            for d_str in available_dates:
+                label = d_str[:7] 
+                months_map.setdefault(label, []).append(d_str)
+
+            for month_key, days in months_map.items():
+                dt_month = datetime.strptime(month_key, "%Y-%m")
+                display_label = dt_month.strftime("%Y-%b")
+                
+                first_of_next_month = (dt_month.replace(day=28) + timedelta(days=4)).replace(day=1)
+                threshold = first_of_next_month + timedelta(days=4, hours=8)
+                
+                if now < threshold: continue
+
+                monthly_pdf = os.path.join(config['save_path'], f"MonthlyNews_{display_label}.pdf")
+                self._generate_if_needed(exporter, config, "Monthly", display_label, days, monthly_pdf)
+
+    def _generate_if_needed(self, exporter, config, r_type, label, days, file_path):
+        items = []
+        latest_db_mtime = 0
+        for d in days:
+            db_p = os.path.join(DB_DIR, f"daily_{d}.json")
+            if os.path.exists(db_p):
+                latest_db_mtime = max(latest_db_mtime, os.path.getmtime(db_p))
+                with open(db_p, 'r', encoding='utf-8') as f:
+                    items.extend(json.load(f))
+        
+        if not items: return
+        
+        needs_gen = False
+        is_update = False
+        if not os.path.exists(file_path):
+            needs_gen = True
+        elif latest_db_mtime > os.path.getmtime(file_path):
+            needs_gen = True
+            is_update = True
+        
+        if needs_gen:
+            self.log_callback(f"📅 正在合并生成{label}的{r_type}报告...")
+            exporter.render_report(r_type, label, items, config, is_update=is_update)
+
     def stop(self): self.is_running = False
