@@ -192,6 +192,7 @@ class MainWindow(ctk.CTk):
 
         self.log_queue = queue.Queue()
         self.token_queue = queue.Queue()
+        self.status_queue = queue.Queue()  # 🌟 线程→主界面：停止状态标签更新
 
         self.init_ui()
         self.after(100, self.process_queues)
@@ -317,6 +318,10 @@ class MainWindow(ctk.CTk):
             val = self.token_queue.get()
             self.lbl_tokens.configure(text=f"已消耗 {val} tokens")
 
+        while not self.status_queue.empty():
+            val = self.status_queue.get()
+            self.lbl_time.configure(text=val)
+
         self.after(100, self.process_queues)
 
     def format_human_readable_freq(self, freq_str):
@@ -339,6 +344,11 @@ class MainWindow(ctk.CTk):
         return " ".join(result)
 
     def start_pipelines(self):
+        # 🌟 防双开：上一次任务的后台线程若仍在收尾，拒绝再次启动（避免双重抓取/烧 token）
+        if (self.fetcher and self.fetcher.is_alive()) or (self.analyzer and self.analyzer.is_alive()):
+            messagebox.showwarning("任务仍在运行", "上一次任务的后台线程仍在收尾，请等待其完全结束（观察日志提示）后再开始。")
+            return
+
         self.config = ConfigManager.load_config()
         self.frame_idle.pack_forget()
         self.frame_running.pack(fill="x", padx=10, pady=(15, 0), before=self.log_area.master)
@@ -413,22 +423,26 @@ class MainWindow(ctk.CTk):
         if self.analyzer: self.analyzer.stop()
         
         self.status_indicator.set_color("#F44336")
-        self.lbl_time.configure(text="程序已停止")
-        
+        self.lbl_time.configure(text="正在中止…")  # 🌟 如实显示：线程可能仍在收尾
+
         self.frame_running.pack_forget()
         self.frame_idle.pack(fill="x", padx=10, pady=15, before=self.log_area.master)
-        
+
         threading.Thread(target=self._monitor_shutdown, daemon=True).start()
 
     def _monitor_shutdown(self):
-        for _ in range(15):
+        # 🌟 等待窗口覆盖最坏在途请求（LLM 120s + 抓取 15s×3 重试），不再 15s 谎报"已中止"
+        for _ in range(150):
             is_alive = False
             if self.fetcher and self.fetcher.is_alive(): is_alive = True
             if self.analyzer and self.analyzer.is_alive(): is_alive = True
-            if not is_alive: break
+            if not is_alive:
+                self.status_queue.put("程序已停止")
+                self.write_log("✅ 任务已中止")
+                return
             time.sleep(1)
-            
-        self.write_log("✅ 任务已中止")
+
+        self.write_log("⚠️ 后台线程仍在收尾（LLM 请求可能未结束）。已请求停止；请稍候或关闭窗口，勿立即重新启动。")
 
     def update_timer(self):
         if self.is_running:

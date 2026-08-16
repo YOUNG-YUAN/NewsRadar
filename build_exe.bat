@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul
-title NewsRadar 自动打包工具 v2.0.0
+title NewsRadar 自动打包工具 v2.3
 
 echo ==========================================
-echo 📦 正在编译 NewsRadar 2.0.0 (生产环境标准)
+echo 📦 正在编译 NewsRadar v2.3 (生产环境标准)
 echo ==========================================
 echo.
 
@@ -36,6 +36,7 @@ echo [2/3] 正在执行 PyInstaller 核心编译...
     --collect-all customtkinter ^
     --hidden-import dateutil ^
     --hidden-import markdown ^
+    --hidden-import httpx ^
     main.py
 
 echo.

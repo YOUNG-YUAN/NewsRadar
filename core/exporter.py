@@ -1,8 +1,9 @@
 import os
 import sys
 import subprocess
+import shutil
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from .config_mgr import BASE_DIR, DB_DIR
 
 try:
@@ -40,6 +41,38 @@ ORDERED_CATEGORIES = [
     "科技 Tech", "科学 Science", "健康 Health", "能源 Energy",
     "环境与气候 Environment and Climate", "生活 Lifestyle", "文艺 Arts and Culture", "体育 Sports"
 ]
+
+def format_display_time(time_str):
+    """把数据湖里的 time 转成系统本地时区展示。
+    新格式 'UTC YYYY-MM-DD HH:MM' → 系统本地时间；旧格式/无法解析则原样返回。"""
+    if not time_str:
+        return time_str
+    s = str(time_str).strip()
+    if s.upper().startswith("UTC "):
+        try:
+            dt = datetime.strptime(s[4:], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+            return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return time_str
+    return time_str
+
+def _find_browsers():
+    """探测可用的 Chromium 系浏览器可执行文件，返回候选列表（按优先级）。
+    覆盖常见安装路径 + 用户级 LOCALAPPDATA + PATH 环境变量中的 Edge/Chrome/Chromium/Brave。"""
+    candidates = [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+    ]
+    found = [exe for exe in candidates if exe and os.path.exists(exe)]
+    for name in ("msedge", "chrome", "chromium", "brave"):
+        exe = shutil.which(name)
+        if exe and exe not in found:
+            found.append(exe)
+    return found
 
 class ReportExporter:
     def __init__(self, log_callback):
@@ -158,17 +191,16 @@ class ReportExporter:
                 md.append(f"* **Title**: {item.get('original_title', 'No Title')}")
                 md.append(f"* **关键词**: {kws}")
                 md.append(f"* **情报**: **{item.get('summary', '')}**")
-                md.append(f"* <span class=\"metadata\">📎 **元数据**: 栏目 `[{cat_str}]` | 来源 {item.get('source', '')} | 时间 {item.get('time', '')} | [🔗 原文链接]({item.get('url', '#')})</span>\n")
+                md.append(f"* <span class=\"metadata\">📎 **元数据**: 栏目 `[{cat_str}]` | 来源 {item.get('source', '')} | 时间 {format_display_time(item.get('time', ''))} | [🔗 原文链接]({item.get('url', '#')})</span>\n")
         
         return "\n".join(md)
 
     def _generate_pdf_with_browser(self, html_path, pdf_path):
-        browser_paths = [
-            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-        ]
+        # 🌟 自动探测 Edge/Chrome/Chromium/Brave（常见安装路径 + LOCALAPPDATA + PATH）
+        browser_paths = _find_browsers()
+        if not browser_paths:
+            return False
+
         # 获取 HTML 文件大小，如果是超长报告，增加超时时间
         html_size = os.path.getsize(html_path)
         custom_timeout = 45 if html_size < 500000 else 90 # 🌟 大型报告给 90 秒时间

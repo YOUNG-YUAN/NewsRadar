@@ -1,12 +1,59 @@
 import os
 import threading
-import tkinter as tk
 import customtkinter as ctk
 import tkinter.messagebox as messagebox
-import requests
-from openai import OpenAI
 from core.config_mgr import ConfigManager
+from core.llm_client import call_llm, build_proxy
+from core.prompts import build_connect_test_prompt
 from .ui_utils import ToolTip
+
+
+class ApiSquareButton(ctk.CTkButton):
+    """原生 CTkButton 圆角方形 API 块（CustomTkinter 抗锯齿渲染，即"改之前的样式"）。
+
+    编号与禁用时的红色 ✕ 都由内部 canvas 绘制（**不用** CTkButton 自带 label——
+    它的不透明底色会挡住 ✕ 中央一大片）：先画 ✕ 再画编号，编号在 ✕ 上方、
+    只占数字字形本身，不遮挡斜线主体。✕ 从 corner_radius-2 起笔（旧版为
+    corner_radius+1），每端向外延伸约 20%、整体拉长约 40%，且仍落在圆角填充区内。
+    覆写 _draw + 绑定 canvas <Configure>：布局缩放/尺寸变化后中心内容始终刷新
+    （单靠 _draw 会在画布未完成 DPI 缩放时以过期尺寸绘制一次，之后不再触发）。"""
+    def __init__(self, *args, disabled=False, **kwargs):
+        self._api_disabled = bool(disabled)
+        self._api_text = str(kwargs.get('text', ''))
+        self._api_tc = kwargs.get('text_color', '#000000')
+        kwargs['text'] = ''  # 弃用自带 label（不透明遮挡 ✕），编号改由 canvas 绘制
+        self._api_inset = 10  # 兜底默认，super().__init__ 期间 _draw 即可能触发
+        super().__init__(*args, **kwargs)
+        self._api_inset = max(2, int(kwargs.get('corner_radius', 12) or 12) - 2)
+        # 强制正方形：CTkButton 内部 grid 的圆角列 minsize 与 label 行高不等，
+        # 高 DPI 缩放下会把按钮撑成 43×39 的长方形圆角（横边≠竖边）。
+        # 关闭 grid 传播并给显式等宽高（34 逻辑单位 → 125% 缩放即 43×43），
+        # 任意缩放下都保持正方形。
+        self.pack_propagate(False)
+        self.configure(width=34, height=34)
+        self._canvas.bind("<Configure>", lambda e: self._draw_center_content(), add="+")
+
+    def _draw(self, no_color_updates=False):
+        super()._draw(no_color_updates)
+        self._draw_center_content()
+
+    def _draw_center_content(self):
+        """在 canvas 上绘制中心内容：先 ✕（仅禁用时）后编号，编号在 ✕ 上方。"""
+        try:
+            cv = self._canvas
+            cv.delete("api_center")
+            w, h = cv.winfo_width(), cv.winfo_height()
+            if w < 10 or h < 10:
+                return
+            if self._api_disabled:
+                i = self._api_inset
+                cv.create_line(i, i, w - i, h - i, fill="#F44336", width=2, tags="api_center")
+                cv.create_line(w - i, i, i, h - i, fill="#F44336", width=2, tags="api_center")
+            cv.create_text(w / 2, h / 2, text=self._api_text,
+                           fill=self._api_tc, font=("Microsoft YaHei", 14, "bold"),
+                           tags="api_center")
+        except Exception:
+            pass
 
 class AIModelDialog(ctk.CTkToplevel):
     def __init__(self, parent):
@@ -30,10 +77,16 @@ class AIModelDialog(ctk.CTkToplevel):
             'provider': default_prov,
             'url': tpl.get('url', ''),
             'model': tpl.get('model', ''),
-            'api_key': tpl.get('api_key', '')
+            'api_key': tpl.get('api_key', ''),
+            'enabled': self.config.get('single_api_enabled', True),  # 🌟 单模式 API 启用开关
+            'disable_thinking': self.config.get('single_api_disable_thinking', False)  # 🌟 单模式禁用思考
         }
         self.single_test_status = 0 # 单模式专属状态
-        
+
+        # 🌟 兼容旧配置：multi_apis 无 enabled / disable_thinking 字段时取默认值
+        for api in self.multi_apis:
+            api.setdefault('enabled', True)
+            api.setdefault('disable_thinking', False)
         if not self.multi_apis:
             self.multi_apis = [self.single_api.copy()]
             
@@ -69,10 +122,16 @@ class AIModelDialog(ctk.CTkToplevel):
         self.provider_var = ctk.StringVar()
         self.provider_menu = ctk.CTkOptionMenu(
             tab_frame, values=list(self.config['providers'].keys()),
-            variable=self.provider_var, command=self.on_provider_change, 
+            variable=self.provider_var, command=self.on_provider_change,
             font=("Microsoft YaHei", 14), width=180
         )
         self.provider_menu.pack(side="left", padx=5)
+
+        # 🌟 API 启用开关（样式同网络代理）：关闭时该 API 不参与并发分析
+        #    说明文字颜色随状态变化：启用=蓝（与"选择服务商"下拉框一致 #3B8ED0）、关闭=红
+        self.enable_switch = ctk.CTkSwitch(tab_frame, text="当前API已启用", font=("Microsoft YaHei", 14, "bold"),
+                                           text_color="#3B8ED0", command=self.toggle_api_enable)
+        self.enable_switch.pack(side="left", padx=(15, 0))
 
         params_box = ctk.CTkFrame(self.form_frame, fg_color="transparent")
         params_box.pack(fill="x", pady=5)
@@ -99,6 +158,13 @@ class AIModelDialog(ctk.CTkToplevel):
         
         self.btn_test_single = ctk.CTkButton(key_subframe, text="连接测试", font=("Microsoft YaHei", 14, "bold"), fg_color="#FF9800", text_color="black", hover_color="#F57C00", command=self.run_single_test)
         self.btn_test_single.pack(side="left", padx=5)
+
+        # 🌟 禁用思考开关：qwen 等推理模型勾选后直接输出 content（更快、避免答案进 reasoning_content）
+        ctk.CTkLabel(params_box, text="推理模式", font=("Microsoft YaHei", 14)).grid(row=3, column=0, padx=10, pady=10, sticky="e")
+        self.disable_thinking_check = ctk.CTkCheckBox(
+            params_box, text="禁用思考（推理模型可选，勾选后直接输出、更快）",
+            font=("Microsoft YaHei", 14), border_color="#008CBA", hover_color="#008CBA")
+        self.disable_thinking_check.grid(row=3, column=1, pady=10, sticky="w")
 
         proxy_frame = ctk.CTkFrame(self.form_frame, fg_color="transparent")
         proxy_frame.pack(fill="x", pady=5)
@@ -184,10 +250,24 @@ class AIModelDialog(ctk.CTkToplevel):
             bg_color = "#F44336" 
             text_color = "#FFFFFF"
 
-        border_width = 3 if is_selected else 1
+        border_width = 4 if is_selected else 1   # 🌟 选中态蓝边框（原样式 +40%）
         border_color = "#008CBA" if is_selected else "#A0A0A0"
-        
+
         return bg_color, text_color, border_width, border_color
+
+    def _create_api_square(self, master, index, bg, tc, bw, bc, disabled=False, command=None):
+        """原生 CTkButton 圆角方形 API 块（与"改之前的样式"一致的 CustomTkinter 抗锯齿渲染）。
+
+        圆角 12：外沿大圆角，选中态（bw=4）时内沿自动收窄到 8，即用户认可的外12内8；
+        选中态蓝色加粗边框；禁用（API 关闭）时叠加红色 ✕（内缩不超出圆角边界，
+        中央数字由 CTkButton 自身 label 绘制，不被遮挡）。"""
+        return ApiSquareButton(
+            master, text=str(index + 1), width=30, height=30,
+            corner_radius=12, border_width=bw, border_color=bc,
+            fg_color=bg, text_color=tc, hover_color=bg,
+            font=("Microsoft YaHei", 14, "bold"),
+            command=command, disabled=disabled,
+        )
 
     def render_door_panel(self):
         for widget in self.right_panel.winfo_children():
@@ -199,10 +279,10 @@ class AIModelDialog(ctk.CTkToplevel):
             slot_frame = ctk.CTkFrame(self.right_panel, fg_color="transparent")
             slot_frame.pack(side="left", fill="both", expand=True, padx=5, pady=10)
             
-            # 单模式渲染专属外观
+            # 单模式渲染专属外观（禁用时叠加 ✕）
             bg, tc, bw, bc = self.get_slot_appearance(-1)
-            btn_1 = ctk.CTkButton(slot_frame, text="1", width=30, height=30, font=("Microsoft YaHei", 14, "bold"),
-                                  fg_color=bg, text_color=tc, border_width=bw, border_color=bc, hover_color=bg)
+            btn_1 = self._create_api_square(slot_frame, 0, bg, tc, bw, bc,
+                                            disabled=not self.single_api.get('enabled', True))
             btn_1.pack(pady=5)
             
             door_text = "单\n模\n式\n\n▶\n切\n换"
@@ -225,10 +305,11 @@ class AIModelDialog(ctk.CTkToplevel):
             row, col = 0, 0
             for i in range(len(self.multi_apis)):
                 bg, tc, bw, bc = self.get_slot_appearance(i)
-                btn = ctk.CTkButton(grid_frame, text=str(i+1), width=30, height=30, font=("Microsoft YaHei", 14, "bold"), 
-                                    fg_color=bg, text_color=tc, border_width=bw, border_color=bc, hover_color=bg,
-                                    command=lambda idx=i: self.switch_api_slot(idx))
-                btn.grid(row=row, column=col, padx=4, pady=4)
+                # 🌟 Canvas 方形块：禁用时叠加红色 ✕（两根细斜线，不挡中央数字）
+                sq = self._create_api_square(grid_frame, i, bg, tc, bw, bc,
+                                             disabled=not self.multi_apis[i].get('enabled', True),
+                                             command=lambda idx=i: self.switch_api_slot(idx))
+                sq.grid(row=row, column=col, padx=4, pady=4)
                 col += 1
                 if col > 1:
                     col = 0
@@ -258,7 +339,9 @@ class AIModelDialog(ctk.CTkToplevel):
             'provider': default_prov,
             'url': tpl.get('url', ''),
             'model': tpl.get('model', ''),
-            'api_key': ''  
+            'api_key': '',
+            'enabled': True,  # 🌟 新节点默认启用
+            'disable_thinking': False  # 🌟 新节点默认不禁用思考
         }
         
         self.multi_apis.append(new_api)
@@ -282,12 +365,28 @@ class AIModelDialog(ctk.CTkToplevel):
             'provider': self.provider_var.get(),
             'url': self.url_entry.get().strip(),
             'model': self.name_entry.get().strip(),
-            'api_key': self.real_api_key
+            'api_key': self.real_api_key,
+            'enabled': bool(self.enable_switch.get()),  # 🌟 API 启用/关闭
+            'disable_thinking': bool(self.disable_thinking_check.get())  # 🌟 禁用思考
         }
         if not self.is_multi_mode:
             self.single_api = data
         else:
             self.multi_apis[self.current_api_index] = data
+
+    def toggle_api_enable(self):
+        """切换当前 API 槽位的启用/关闭状态（开关样式同网络代理）。"""
+        self.save_current_slot_to_memory()
+        self._refresh_enable_switch()
+        self.render_door_panel()
+
+    def _refresh_enable_switch(self):
+        """按开关当前状态刷新说明文字与颜色：启用=蓝（与下拉框一致 #3B8ED0）、关闭=红。"""
+        enabled = bool(self.enable_switch.get())
+        self.enable_switch.configure(
+            text="当前API已启用" if enabled else "当前API已关闭",
+            text_color="#3B8ED0" if enabled else "#F44336",
+        )
 
     def load_slot_to_form(self, index):
         if index == -1 or not self.is_multi_mode:
@@ -300,15 +399,30 @@ class AIModelDialog(ctk.CTkToplevel):
         self.url_entry.delete(0, 'end'); self.url_entry.insert(0, data.get('url', ''))
         self.name_entry.delete(0, 'end'); self.name_entry.insert(0, data.get('model', ''))
         self.real_api_key = data.get('api_key', '')
-        
+
         self.is_key_visible = False
         self.btn_eye.configure(text="🔒")
-        self.key_entry.configure(show="")
+        # 🌟 始终以隐藏密码模式展示（show=●）：输入框内直接放真实 key，由掩码显示成圆点，
+        #    不再用占位圆点 + 无掩码的 hack（旧逻辑导致粘贴的 key 无法自动保存）。
+        self.key_entry.configure(show="●")
         self.key_entry.delete(0, 'end')
-        if self.real_api_key:
-            self.key_entry.insert(0, "●" * 20)
-            
-        self.render_door_panel() 
+        self.key_entry.insert(0, self.real_api_key)
+
+        # 🌟 同步 API 启用开关状态
+        enabled = data.get('enabled', True)
+        if enabled:
+            self.enable_switch.select()
+        else:
+            self.enable_switch.deselect()
+        self._refresh_enable_switch()
+
+        # 🌟 同步禁用思考状态
+        if data.get('disable_thinking', False):
+            self.disable_thinking_check.select()
+        else:
+            self.disable_thinking_check.deselect()
+
+        self.render_door_panel()
 
     def on_provider_change(self, new_provider):
         tpl = self.config.get('providers', {}).get(new_provider, {})
@@ -329,91 +443,67 @@ class AIModelDialog(ctk.CTkToplevel):
             lbl = "单模式 API"
             
         self.lbl_test_result.configure(text=f"正在检测 {lbl}...", text_color="black")
-        
-        use_proxy = bool(self.proxy_switch.get())
-        proxy_str = f"{self.proxy_server_entry.get()}:{self.proxy_port_entry.get()}" if use_proxy else None
 
-        threading.Thread(target=self._perform_single_test, args=(api_data, idx, proxy_str), daemon=True).start()
+        threading.Thread(target=self._perform_single_test, args=(api_data, idx), daemon=True).start()
 
     def run_multi_test(self):
         self.save_current_slot_to_memory()
         self.lbl_test_result.configure(text="正在检测所有接口...", text_color="black")
-        use_proxy = bool(self.proxy_switch.get())
-        proxy_str = f"{self.proxy_server_entry.get()}:{self.proxy_port_entry.get()}" if use_proxy else None
 
-        threading.Thread(target=self._perform_batch_test, args=(proxy_str,), daemon=True).start()
+        threading.Thread(target=self._perform_batch_test, daemon=True).start()
+
+    def _proxy_config(self):
+        """把表单代理状态转成 llm_client.build_proxy 需要的 config 子集（不再写 os.environ）。"""
+        return {
+            'ai_use_proxy': bool(self.proxy_switch.get()),
+            'ai_proxy_server': self.proxy_server_entry.get(),
+            'ai_proxy_port': self.proxy_port_entry.get(),
+        }
 
     def _test_core_logic(self, api):
-        provider = api.get('provider')
-        url = api.get('url')
-        name = api.get('model')
-        key = api.get('api_key')
-        
-        if not key: return False, "未填写 API Key"
-
-        # 🌟 优化：提供明确的测试意图，防止模型“过度思考”导致延迟
-        test_prompt = "To test if the API connection is normal, please reply 'ok'."
+        if not api.get('api_key', '').strip():
+            return False, "未填写 API Key"
 
         try:
-            if provider == "Google Gemini":
-                headers = {"Content-Type": "application/json"}
-                data = {"contents": [{"parts": [{"text": test_prompt}]}]}
-                base = url.strip().rstrip('/')
-                if not base.endswith('models'): base = f"{base}/models"
-                full_url = f"{base}/{name}:generateContent?key={key}"
-                resp = requests.post(full_url, headers=headers, json=data)
-                resp.raise_for_status()
-                res = resp.json()['candidates'][0]['content']['parts'][0]['text']
-            elif provider == "Claude":
-                headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-                data = {"model": name, "max_tokens": 10, "messages": [{"role": "user", "content": test_prompt}]}
-                resp = requests.post(url, headers=headers, json=data)
-                resp.raise_for_status()
-                res = resp.json()['content'][0]['text']
-            else:
-                client = OpenAI(api_key=key, base_url=url)
-                response = client.chat.completions.create(model=name, messages=[{"role": "user", "content": test_prompt}])
-                res = response.choices[0].message.content
-
-            if res: return True, "OK"
+            # 🌟 复用与 pipelines 完全一致的 LLM 调用（单一事实来源，消除两套逻辑漂移）。
+            #    测试提示词极简，防止推理模型过度思考延迟。
+            proxies, proxy_url = build_proxy(self._proxy_config())
+            result_text, _ = call_llm(
+                api, build_connect_test_prompt(), "test",
+                proxies=proxies, proxy_url=proxy_url,
+            )
+            if result_text and result_text.strip():
+                return True, "OK"
             return False, "返回为空"
         except Exception as e:
             return False, str(e)[:30]
 
-    def _perform_single_test(self, api_data, index, proxy_str):
-        import os
-        if proxy_str: os.environ['HTTP_PROXY'], os.environ['HTTPS_PROXY'] = proxy_str, proxy_str
-        else: os.environ.pop('HTTP_PROXY', None); os.environ.pop('HTTPS_PROXY', None)
-
+    def _perform_single_test(self, api_data, index):
         success, msg = self._test_core_logic(api_data)
-        
+
         if index == -1:
             self.single_test_status = 1 if success else -1
             name_lbl = "单模式 API"
         else:
             self.api_test_status[index] = 1 if success else -1
             name_lbl = f"API-{index+1}"
-        
+
         self.after(0, self.render_door_panel)
         if success:
             self.after(0, self._show_result, True, f"✅ {name_lbl} 测试通过！")
         else:
             self.after(0, self._show_result, False, f"❌ {name_lbl} 失败: {msg}")
 
-    def _perform_batch_test(self, proxy_str):
-        import os
-        if proxy_str: os.environ['HTTP_PROXY'], os.environ['HTTPS_PROXY'] = proxy_str, proxy_str
-        else: os.environ.pop('HTTP_PROXY', None); os.environ.pop('HTTPS_PROXY', None)
-
+    def _perform_batch_test(self):
         all_success = True
         results_log = []
 
         for idx, api in enumerate(self.multi_apis):
             success, msg = self._test_core_logic(api)
             self.api_test_status[idx] = 1 if success else -1
-            
+
             self.after(0, self.render_door_panel)
-            
+
             if success:
                 results_log.append(f"✅ API-{idx+1} [{api.get('provider')}]: 畅通")
             else:
@@ -422,7 +512,7 @@ class AIModelDialog(ctk.CTkToplevel):
 
         summary = "\n".join(results_log)
         self.after(0, lambda: messagebox.showinfo(f"一键测试结果 ({len(self.multi_apis)}个)", summary))
-        
+
         if all_success:
             self.after(0, self._show_result, True, f"✅ 全部 {len(self.multi_apis)} 个并发接口畅通！")
         else:
@@ -446,6 +536,8 @@ class AIModelDialog(ctk.CTkToplevel):
         self.config['providers'][p_name]['url'] = self.single_api['url']
         self.config['providers'][p_name]['model'] = self.single_api['model']
         self.config['providers'][p_name]['api_key'] = self.single_api['api_key']
+        self.config['single_api_enabled'] = bool(self.single_api.get('enabled', True))  # 🌟 单模式启用状态持久化
+        self.config['single_api_disable_thinking'] = bool(self.single_api.get('disable_thinking', False))  # 🌟 单模式禁用思考持久化
         
         self.config['ai_use_proxy'] = bool(self.proxy_switch.get())
         self.config['ai_proxy_server'] = self.proxy_server_entry.get()
@@ -470,43 +562,22 @@ class AIModelDialog(ctk.CTkToplevel):
             self.proxy_port_entry.configure(state="disabled", text_color="gray")
 
     def _sync_real_key_from_entry(self):
-        if self.focus_get() == self.key_entry:
-            current_val = self.key_entry.get()
-            if self.key_entry.cget("show") == "●" or current_val != "●" * 20:
-                self.real_api_key = current_val
+        # 🌟 直接读取输入框当前内容（掩码模式下 get() 仍返回真实 key），保证自动保存。
+        # 注：不能用 focus_get()==self.key_entry 判断——CTkEntry 内部封装的是 tk.Entry，
+        #     focus_get() 返回内部 entry，与 self.key_entry 恒不等，旧逻辑导致永远不同步。
+        self.real_api_key = self.key_entry.get().strip()
 
     def on_key_focus_in(self, event):
-        if not self.is_key_visible:
-            self.key_entry.delete(0, 'end')
-            self.key_entry.insert(0, self.real_api_key)
-            self.key_entry.configure(show="●")
+        pass  # 输入框默认已是隐藏密码模式，无需在获得焦点时切换
 
     def on_key_focus_out(self, event):
-        current_val = self.key_entry.get()
-        if self.key_entry.cget("show") == "●" or current_val != "●" * 20:
-            self.real_api_key = current_val
-        if not self.is_key_visible:
-            self.key_entry.configure(show="")
-            self.key_entry.delete(0, 'end')
-            if self.real_api_key:
-                self.key_entry.insert(0, "●" * 20)
+        self._sync_real_key_from_entry()
 
     def toggle_key_visibility(self):
-        current_val = self.key_entry.get()
-        if self.key_entry.cget("show") == "●" or current_val != "●" * 20:
-            self.real_api_key = current_val
+        self._sync_real_key_from_entry()
         self.is_key_visible = not self.is_key_visible
-        if self.is_key_visible:
-            self.btn_eye.configure(text="👁")
-            self.key_entry.configure(show="")
-            self.key_entry.delete(0, 'end')
-            self.key_entry.insert(0, self.real_api_key)
-        else:
-            self.btn_eye.configure(text="🔒")
-            self.key_entry.configure(show="")
-            self.key_entry.delete(0, 'end')
-            if self.real_api_key:
-                self.key_entry.insert(0, "●" * 20)
+        self.btn_eye.configure(text="👁" if self.is_key_visible else "🔒")
+        self.key_entry.configure(show="" if self.is_key_visible else "●")
 
     def on_prompt_focus_in(self, event):
         text = self.prompt_text.get("1.0", "end-1c")

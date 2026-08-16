@@ -1,16 +1,14 @@
 # ==========================================
-# 📡 NewsRadar 极简精炼版忽略规则
+# 📡 NewsRadar 发布用忽略规则
 # ==========================================
 
-# 🌟 隐私护航 (绝对禁区)
+# 🌟 隐私护航 (绝对禁区：含 API Key / 运行数据)
 /data/
-
-# 🌟 运行数据与日志
 /logs/
 /results/
 *.log
 
-# 🌟 虚拟环境 (你的 venv 文件夹)
+# 🌟 虚拟环境 (本地 venv)
 /NewsRadar/
 
 # 🌟 打包产物与中间件
@@ -18,24 +16,36 @@
 /dist/
 *.spec
 
-# 🌟 用户指定的“无关内容” (辅助/测试/遗留脚本)
+# 🌟 内部开发文档与工具（不上 GitHub）
+/knowledge/
+/updates/
+/memory/
+.claude/
+GUI以及图标设计思路.pptx
+
+# 🌟 更新说明（个人发布文档，不随源码发布）
+RELEASE_NOTES_2026-08-13.md
+
+# 🌟 辅助/测试/遗留脚本（发布排除）
+apply_update.py
+make_patch.py
+check_raw_bak.py
+migrate_old_data.py
 fix_md_links.py
 fix_messy_report.py
+md_to_pdf_batch.py
 news_scraper.py
 npr_scanner.py
-test_news_scraper.py
-test_rss.py
 rescue_failed_chunks.py
-md_to_pdf_batch.py
+test_news_scraper.py
+test_proxy.py
+test_rss.py
 /backup/
-
-# 🌟 图标源码与设计稿
-GUI以及图标设计思路.pptx
 
 # 🌟 环境引导脚本 (由 README 取代)
 run.bat
 
-# 忽略所有字体文件 (避免侵权及仓库臃肿)
+# 忽略所有字体文件 (避免侵权及仓库臃肿，保留占位说明 txt)
 fonts/*.ttf
 fonts/*.ttc
 fonts/*.otf

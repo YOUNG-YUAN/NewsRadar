@@ -1,6 +1,9 @@
 import os
 import json
 import sys
+import shutil
+import sqlite3
+import threading
 
 # ==========================================
 # 📂 动态挂载运行路径
@@ -26,8 +29,16 @@ for d in [DATA_DIR, RAW_DIR, FAILED_DIR, RESULTS_DIR, LOGS_DIR, FONTS_DIR, DB_DI
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 SOURCES_FILE = os.path.join(DATA_DIR, 'sources.json')
 HISTORY_FILE = os.path.join(DATA_DIR, 'history.json')
+# 🌟 新增：历史 URL 去重改由 SQLite 承载（data/history.db），避免每周期全量读写不断膨胀的 JSON
+HISTORY_DB = os.path.join(DATA_DIR, 'history.db')
 
-VERSION = "v2.2.3" 
+# 🌟 历史库读写锁（防止多线程并发写损坏）
+_HISTORY_LOCK = threading.Lock()
+
+# 🌟 配置文件读写锁（RLock：load_config 内部会再调 save_config，需可重入）
+_CONFIG_LOCK = threading.RLock()
+
+VERSION = "v2.3"
 
 # ==========================================
 # ⚙️ 默认初始配置
@@ -41,13 +52,14 @@ DEFAULT_CONFIG = {
         "Claude": {"url": "https://api.anthropic.com/v1/messages", "model": "claude-3-haiku-20240307", "api_key": ""},
         "DeepSeek": {"url": "https://api.deepseek.com", "model": "deepseek-chat", "api_key": ""},
         "Qwen (通义千问)": {"url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus", "api_key": ""},
-        "Local Ollama": {"url": "http://localhost:11434/v1", "model": "qwen2.5:7b", "api_key": "ollama"}
+        "OpenAI compatible": {"url": "http://localhost:11434/v1", "model": "qwen2.5:7b", "api_key": "ollama"}
     },
     
     "is_multi_mode": False,
     "multi_apis": [],
-    
-    "listen_freq": "12h", 
+    "single_api_disable_thinking": False,  # 🌟 单模式禁用思考（qwen 等推理模型快速直接输出）
+
+    "listen_freq": "12h",
     "total_tokens": 0,
     "ai_use_proxy": False,
     "ai_proxy_server": "http://127.0.0.1",
@@ -377,37 +389,52 @@ DEFAULT_SOURCES = [
 class ConfigManager:
     @staticmethod
     def load_config():
-        if not os.path.exists(CONFIG_FILE):
-            ConfigManager.save_config(DEFAULT_CONFIG)
-            return DEFAULT_CONFIG
-        
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            config = json.load(f)
+        with _CONFIG_LOCK:
+            if not os.path.exists(CONFIG_FILE):
+                ConfigManager.save_config(DEFAULT_CONFIG)
+                return DEFAULT_CONFIG
 
-        if "providers" not in config:
-            config["providers"] = DEFAULT_CONFIG["providers"]
-            config["ai_provider"] = "Google Gemini"
+            try:
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            except (json.JSONDecodeError, ValueError, OSError):
+                # 🌟 配置为空/损坏时不再启动崩溃：备份损坏文件后回退默认配置
+                #    （损坏多因历史版本直接写文件、写一半被中断导致，见 save_config 原子写）
+                try:
+                    shutil.copy2(CONFIG_FILE, CONFIG_FILE + '.corrupt.bak')
+                except OSError:
+                    pass
+                config = DEFAULT_CONFIG
+                ConfigManager.save_config(config)
 
-        if "rss_use_proxy" not in config:
-            config["rss_use_proxy"] = False
-            config["rss_proxy_server"] = "http://127.0.0.1"
-            config["rss_proxy_port"] = "10808"
+            if "providers" not in config:
+                config["providers"] = DEFAULT_CONFIG["providers"]
+                config["ai_provider"] = "Google Gemini"
 
-        changed = False
-        for key, default_val in DEFAULT_CONFIG.items():
-            if key not in config:
-                config[key] = default_val
-                changed = True
-            
-        if changed:
-            ConfigManager.save_config(config)
-            
-        return config
+            if "rss_use_proxy" not in config:
+                config["rss_use_proxy"] = False
+                config["rss_proxy_server"] = "http://127.0.0.1"
+                config["rss_proxy_port"] = "10808"
+
+            changed = False
+            for key, default_val in DEFAULT_CONFIG.items():
+                if key not in config:
+                    config[key] = default_val
+                    changed = True
+
+            if changed:
+                ConfigManager.save_config(config)
+
+            return config
 
     @staticmethod
     def save_config(config):
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=4, ensure_ascii=False)
+        with _CONFIG_LOCK:
+            # 🌟 原子写：先写 .tmp 再 os.replace 覆盖，崩溃/断电不会截断 config.json
+            tmp = CONFIG_FILE + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=4, ensure_ascii=False)
+            os.replace(tmp, CONFIG_FILE)
 
     @staticmethod
     def load_sources():
@@ -423,15 +450,67 @@ class ConfigManager:
             json.dump(sources, f, indent=4, ensure_ascii=False)
 
     @staticmethod
+    def _ensure_history_db():
+        """确保 SQLite 历史表存在（url 主键天然去重）。"""
+        conn = sqlite3.connect(HISTORY_DB)
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS history (url TEXT PRIMARY KEY)")
+            conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _migrate_legacy_history():
+        """一次性把旧版 data/history.json 迁移进 SQLite。幂等、安全。"""
+        if not os.path.exists(HISTORY_FILE):
+            return
+        try:
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                items = json.load(f)
+        except Exception:
+            return
+        if not items:
+            return
+        ConfigManager._ensure_history_db()
+        with _HISTORY_LOCK:
+            conn = sqlite3.connect(HISTORY_DB)
+            try:
+                count = conn.execute("SELECT COUNT(*) FROM history").fetchone()[0]
+                if count > 0:
+                    return  # 已迁移过，跳过
+                conn.executemany("INSERT OR IGNORE INTO history(url) VALUES (?)", [(str(u),) for u in items])
+                conn.commit()
+            finally:
+                conn.close()
+
+    @staticmethod
     def load_history():
-        if not os.path.exists(HISTORY_FILE): return []
-        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        """返回全部历史 URL 列表（来自 SQLite 去重表）。"""
+        ConfigManager._migrate_legacy_history()
+        ConfigManager._ensure_history_db()
+        with _HISTORY_LOCK:
+            conn = sqlite3.connect(HISTORY_DB)
+            try:
+                rows = conn.execute("SELECT url FROM history").fetchall()
+            finally:
+                conn.close()
+        return [r[0] for r in rows]
+
+    @staticmethod
+    def append_history(urls):
+        """批量增量写入历史 URL。INSERT OR IGNORE 天然去重，无需全量重写文件。"""
+        if not urls:
+            return
+        ConfigManager._migrate_legacy_history()
+        ConfigManager._ensure_history_db()
+        with _HISTORY_LOCK:
+            conn = sqlite3.connect(HISTORY_DB)
+            try:
+                conn.executemany("INSERT OR IGNORE INTO history(url) VALUES (?)", [(str(u),) for u in urls])
+                conn.commit()
+            finally:
+                conn.close()
 
     @staticmethod
     def add_to_history(url):
-        history = ConfigManager.load_history()
-        if url not in history:
-            history.append(url)
-            with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-                json.dump(history, f, ensure_ascii=False)
+        ConfigManager.append_history([url])

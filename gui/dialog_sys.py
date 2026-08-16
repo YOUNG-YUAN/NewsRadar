@@ -220,7 +220,7 @@ class PersonalizationDialog(ctk.CTkToplevel):
         self.preview_text.config(state="normal")
         self.preview_text.delete("1.0", "end")
         self.preview_text.insert("end", "📡 全球新闻 AI 监听简报\n", "h1")
-        self.preview_text.insert("end", f"> 🧠 生成模型：Local Ollama | Qwen3.5-30B\n", "blockquote")
+        self.preview_text.insert("end", f"> 🧠 生成模型：OpenAI compatible | Qwen3.5-30B\n", "blockquote")
         self.preview_text.insert("end", f"> 🕒 截获时间：2026-05-01 12:00\n", "blockquote")
         self.preview_text.insert("end", "📑 栏目导航\n", "h2")
         self.preview_text.insert("end", "• 世界 World\n", "link")
